@@ -1,0 +1,57 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\hu60\\.ohos\\config\\default_BtGamePad_fook0SYrNXbSwe701f4pNZ-TR9XBnvZSqIH3aryIuEE=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B31D2524FDC4D5E5FD860DA8CC925B8EC8F13DC790B48CC81164394872846DB683187518C782375",
+          "profile": "C:\\Users\\hu60\\.ohos\\config\\default_BtGamePad_fook0SYrNXbSwe701f4pNZ-TR9XBnvZSqIH3aryIuEE=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\hu60\\.ohos\\config\\default_BtGamePad_fook0SYrNXbSwe701f4pNZ-TR9XBnvZSqIH3aryIuEE=.p12",
+          "storePassword": "0000001B4FD3EEFF6DDAFF2026BDE32369B30E9C0F0584DAA1569200B83B00B90C1B2FC363BA6C99E4DC55"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "nativeCompiler": "BiSheng",
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}
