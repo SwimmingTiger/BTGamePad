@@ -3,6 +3,10 @@
     {
       "name": "app_name",
       "value": "BtGamePad"
+    },
+    {
+      "name": "bluetooth_permission_reason",
+      "value": "用于将手柄映射后的 HID 输入发送到远程设备"
     }
   ]
 }
