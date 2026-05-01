@@ -1,0 +1,3087 @@
+import type commonAbility from '@ohos.app.ability.common';
+import fs from '@ohos.file.fs';
+import fileUri from '@ohos.file.fileuri';
+import picker from '@ohos.file.picker';
+import router from '@ohos.router';
+import { window } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { HidDebugState, RemoteDeviceItem } from '../services/AbsoluteTouchHidService';
+import { hidService, layoutRepository, nativeInputRuntimeService } from '../services/AppSession';
+import { InputLayout, LayoutControlItem } from '../services/LayoutRepository';
+import { NativeInputRuntimeState } from '../services/NativeInputRuntimeService';
+
+const BACKGROUND_DIRECTORY_NAME = 'layout-backgrounds';
+const TOUCH_ACTION_DOWN = 0;
+const TOUCH_ACTION_UP = 1;
+const TOUCH_ACTION_MOVE = 2;
+const TOUCH_ACTION_CANCEL = 3;
+const CONTROL_CANVAS_UNITS = 1000;
+const STICK_CONTROL_DEFAULT_SIZE = 120;
+const KEYBOARD_CONTROL_DEFAULT_SIZE = 108;
+const BUTTON_CONTROL_DEFAULT_SIZE = 76;
+const CONTROL_DEFAULT_SIZE = BUTTON_CONTROL_DEFAULT_SIZE;
+const CONTROL_MIN_SIZE = 56;
+const CONTROL_MAX_SIZE = 320;
+const ROUND_CONTROL_MIN_SIZE = 36;
+const LOOK_CONTROL_ASPECT_RATIO = 1.42;
+const LOOK_CONTROL_MIN_WIDTH = 72;
+const LOOK_CONTROL_MIN_HEIGHT = 52;
+const CONTROL_SWIPE_DEFAULT_WIDTH = 172;
+const CONTROL_SWIPE_DEFAULT_HEIGHT = 52;
+const CONTROL_SWIPE_MIN_LENGTH = 104;
+const CONTROL_SWIPE_MAX_LENGTH = 360;
+const CONTROL_SWIPE_MIN_THICKNESS = 40;
+const CONTROL_SWIPE_MAX_THICKNESS = 112;
+const CONTROL_SWIPE_HANDLE_SIZE = 24;
+const CONTROL_RESIZE_STEP = 20;
+const CONTROL_LABEL_GAP = 3;
+const SWIPE_DIRECTION_GAP = 4;
+const CONTROL_TYPE_STICK_MOVE = 'stick-move';
+const CONTROL_TYPE_STICK_LOOK = 'stick-look';
+const CONTROL_TYPE_KEYBOARD_MOVE = 'keyboard-move';
+const CONTROL_TYPE_KEYBOARD_LOOK = 'keyboard-look';
+const CONTROL_TYPE_BUTTON = 'button';
+const CONTROL_TYPE_SWIPE = 'swipe';
+const CONTROL_PINCH_MIN_SCALE = 0.6;
+const CONTROL_PINCH_MAX_SCALE = 1.8;
+const MENU_BUTTON_WIDTH = 84;
+const MENU_BUTTON_HEIGHT = 52;
+const MENU_EDGE_MARGIN = 16;
+const MENU_PANEL_WIDTH = 296;
+const MENU_PANEL_HEIGHT = 540;
+const MENU_PANEL_OFFSET = 10;
+const MENU_DRAG_THRESHOLD_PX = 8;
+const PRIMARY_COLOR = '#1456F0';
+const SUCCESS_COLOR = '#0D8A5F';
+const WARNING_COLOR = '#B06A00';
+const CARD_COLOR = '#F5F7FB';
+const KEY_EVENT_DOWN = 0;
+const MOUSE_ACTION_MOVE = 1;
+const MOUSE_ACTION_BUTTON_DOWN = 2;
+const MOUSE_ACTION_AXIS_UPDATE = 5;
+const BINDING_AXIS_THRESHOLD = 0.24;
+const DIRECTIONAL_BINDING_PART_COUNT = 4;
+const DIRECTIONAL_BINDING_ORDER_LABELS: Array<string> = ['上', '左', '下', '右'];
+const LOG_DOMAIN = 0x0000;
+const LOG_TAG = 'LayoutEditor';
+
+function clampEditorValue(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+class ControlLibraryItem {
+  label: string;
+  controlType: string;
+  actionType: string;
+  defaultSize: number;
+
+  constructor(label: string, controlType: string, actionType: string, defaultSize: number) {
+    this.label = label;
+    this.controlType = controlType;
+    this.actionType = actionType;
+    this.defaultSize = defaultSize;
+  }
+}
+
+class BindingOption {
+  label: string;
+  code: string;
+
+  constructor(label: string, code: string) {
+    this.label = label;
+    this.code = code;
+  }
+}
+
+class CapturedBinding {
+  code: string;
+  label: string;
+  sourceLabel: string;
+
+  constructor(code: string, label: string, sourceLabel: string) {
+    this.code = code;
+    this.label = label;
+    this.sourceLabel = sourceLabel;
+  }
+}
+
+class ControlPayload {
+  rotation: number = 0;
+  bindingLabel: string = '';
+  bindingSource: string = '';
+  directionalKeyCodes: string = '';
+  directionalKeyLabels: string = '';
+  swipeStartX: number = -1;
+  swipeStartY: number = -1;
+  swipeEndX: number = -1;
+  swipeEndY: number = -1;
+}
+
+class EditorPoint {
+  x: number;
+  y: number;
+
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+
+  clone(): EditorPoint {
+    return new EditorPoint(this.x, this.y);
+  }
+}
+
+class SwipeHandlePositions {
+  start: EditorPoint;
+  end: EditorPoint;
+
+  constructor(start: EditorPoint, end: EditorPoint) {
+    this.start = start;
+    this.end = end;
+  }
+}
+
+const CONTROL_LIBRARY_ITEMS: Array<ControlLibraryItem> = [
+  new ControlLibraryItem('摇杆移动', CONTROL_TYPE_STICK_MOVE, 'touch', STICK_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('摇杆视角', CONTROL_TYPE_STICK_LOOK, 'touch', STICK_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('键盘移动', CONTROL_TYPE_KEYBOARD_MOVE, 'touch', KEYBOARD_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('键盘视角', CONTROL_TYPE_KEYBOARD_LOOK, 'touch', KEYBOARD_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('按钮', CONTROL_TYPE_BUTTON, 'touch', BUTTON_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('滑动', CONTROL_TYPE_SWIPE, 'swipe', CONTROL_SWIPE_DEFAULT_WIDTH),
+];
+
+const STICK_MOVE_BINDINGS: Array<BindingOption> = [
+  new BindingOption('左摇杆', 'axis-left-stick'),
+  new BindingOption('右摇杆', 'axis-right-stick'),
+];
+
+const STICK_LOOK_BINDINGS: Array<BindingOption> = [
+  new BindingOption('右摇杆', 'axis-right-stick'),
+  new BindingOption('左摇杆', 'axis-left-stick'),
+];
+
+const KEYBOARD_MOVE_BINDINGS: Array<BindingOption> = [
+  new BindingOption('W / A / S / D', 'keys-wasd'),
+  new BindingOption('方向键', 'keys-arrows'),
+  new BindingOption('数字键盘 8 / 4 / 2 / 6', 'keys-numpad-move'),
+];
+
+const KEYBOARD_LOOK_BINDINGS: Array<BindingOption> = [
+  new BindingOption('I / J / K / L', 'keys-ijkl'),
+  new BindingOption('方向键', 'keys-arrows-look'),
+  new BindingOption('数字键盘 8 / 4 / 2 / 6', 'keys-numpad-look'),
+];
+
+const BUTTON_BINDINGS: Array<BindingOption> = [
+  new BindingOption('A', 'button-a'),
+  new BindingOption('B', 'button-b'),
+  new BindingOption('X', 'button-x'),
+  new BindingOption('Y', 'button-y'),
+  new BindingOption('L1', 'button-l1'),
+  new BindingOption('R1', 'button-r1'),
+  new BindingOption('L2', 'button-l2'),
+  new BindingOption('R2', 'button-r2'),
+  new BindingOption('开始', 'button-start'),
+  new BindingOption('选择', 'button-select'),
+  new BindingOption('方向上', 'button-dpad-up'),
+  new BindingOption('方向下', 'button-dpad-down'),
+  new BindingOption('方向左', 'button-dpad-left'),
+  new BindingOption('方向右', 'button-dpad-right'),
+];
+
+const SWIPE_BINDINGS: Array<BindingOption> = [
+  new BindingOption('左摇杆', 'axis-left-stick'),
+  new BindingOption('右摇杆', 'axis-right-stick'),
+  new BindingOption('左扳机', 'axis-left-trigger'),
+  new BindingOption('右扳机', 'axis-right-trigger'),
+];
+
+const ALL_BINDING_OPTIONS: Array<BindingOption> = [
+  ...STICK_MOVE_BINDINGS,
+  ...STICK_LOOK_BINDINGS,
+  ...KEYBOARD_MOVE_BINDINGS,
+  ...KEYBOARD_LOOK_BINDINGS,
+  ...BUTTON_BINDINGS,
+  ...SWIPE_BINDINGS,
+];
+
+@Component
+struct LayoutSummaryRow {
+  @Prop label: string = '';
+  @Prop value: string = '';
+  @Prop highlight: boolean = false;
+
+  build() {
+    Row() {
+      Text(this.label)
+        .layoutWeight(1)
+        .fontSize(14)
+        .fontColor('#1E2430')
+
+      Text(this.value)
+        .fontSize(13)
+        .fontColor(this.highlight ? PRIMARY_COLOR : '#667085')
+        .textAlign(TextAlign.End)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+  }
+}
+
+@Entry
+@Component
+struct LayoutEditor {
+  private hostContext = this.getUIContext().getHostContext() as commonAbility.UIAbilityContext;
+  private draggingControlId: string = '';
+  private dragStartWindowX: number = 0;
+  private dragStartWindowY: number = 0;
+  private dragStartControlX: number = 0;
+  private dragStartControlY: number = 0;
+  private dragStartSwipeStartPoint: EditorPoint = new EditorPoint(0, 0);
+  private dragStartSwipeEndPoint: EditorPoint = new EditorPoint(0, 0);
+  private pinchingControlId: string = '';
+  private pinchStartControlWidth: number = 0;
+  private pinchStartControlHeight: number = 0;
+  private pinchStartControlX: number = 0;
+  private pinchStartControlY: number = 0;
+  private resizingSwipeControlId: string = '';
+  private resizingSwipeHandle: string = '';
+  private swipeResizeAnchorX: number = 0;
+  private swipeResizeAnchorY: number = 0;
+  private swipeResizeThickness: number = 0;
+  private pendingDirectionalKeyCodes: Array<number> = [];
+  private pendingDirectionalKeyLabels: Array<string> = [];
+  private draggingMenuButton: boolean = false;
+  private menuDragStartWindowX: number = 0;
+  private menuDragStartWindowY: number = 0;
+  private menuButtonDragStartX: number = 0;
+  private menuButtonDragStartY: number = 0;
+  private menuButtonMoved: boolean = false;
+  private editorWindow: window.Window | null = null;
+  @State connectedDeviceName: string = '未连接设备';
+  @State connectedDeviceId: string = '';
+  @State nativeInputState: NativeInputRuntimeState = nativeInputRuntimeService.getState();
+  @State nativeInputDeviceCount: number = 0;
+  @State nativeInputEventCount: number = 0;
+  @State nativeInputLastEvent: string = '等待连接设备后启动原生输入监控';
+  @State savedLayoutCount: number = 0;
+  @State currentLayoutName: string = '默认布局';
+  @State currentLayoutBackgroundImageUri: string = '';
+  @State currentLayoutControlCount: number = 0;
+  @State currentLayoutHasBackground: boolean = false;
+  @State layoutControls: Array<LayoutControlItem> = [];
+  @State selectedControlId: string = '';
+  @State controlEditorMessage: string = '先导入背景图，再添加控件。';
+  @State bindingCaptureState: string = 'idle';
+  @State bindingCaptureHint: string = '选中控件后，按手柄、键盘或鼠标完成绑定。';
+  @State bindingCaptureTargetId: string = '';
+  @State menuExpanded: boolean = false;
+  @State controlLibraryExpanded: boolean = false;
+  @State canvasWidthPx: number = 1;
+  @State canvasHeightPx: number = 1;
+  @State viewportWidthPx: number = 0;
+  @State viewportHeightPx: number = 0;
+  @State menuButtonX: number = MENU_EDGE_MARGIN;
+  @State menuButtonY: number = MENU_EDGE_MARGIN;
+  @State menuButtonInitialized: boolean = false;
+
+  aboutToAppear(): void {
+    this.menuExpanded = false;
+    this.controlLibraryExpanded = false;
+    this.menuButtonInitialized = false;
+    this.configureEditorWindow();
+    this.initializeLayoutRepository();
+    this.refreshConnectionSummary(hidService.getState(), hidService.getDevices());
+    nativeInputRuntimeService.setListener((eventsJson: string) => {
+      this.handleNativeInputEvents(eventsJson);
+    });
+    this.ensureNativeInputRuntime();
+    hidService.setStateListener((state: HidDebugState, devices: Array<RemoteDeviceItem>) => {
+      this.refreshConnectionSummary(state, devices);
+      this.ensureNativeInputRuntime();
+    });
+  }
+
+  aboutToDisappear(): void {
+    hidService.setStateListener(null);
+    nativeInputRuntimeService.setListener(null);
+    nativeInputRuntimeService.stop();
+    this.draggingControlId = '';
+    this.pinchingControlId = '';
+    this.resizingSwipeControlId = '';
+    this.resetPendingDirectionalBinding();
+    this.draggingMenuButton = false;
+    this.restoreEditorWindow();
+  }
+
+  private async configureEditorWindow(): Promise<void> {
+    try {
+      const currentWindow = await window.getLastWindow(this.hostContext);
+      this.editorWindow = currentWindow;
+      await currentWindow.setPreferredOrientation(window.Orientation.LANDSCAPE);
+    } catch (error) {
+      const errorObject = error as Object;
+      hilog.warn(LOG_DOMAIN, LOG_TAG, 'configure editor window failed: %{public}s', JSON.stringify(errorObject));
+    }
+  }
+
+  private restoreEditorWindow(): void {
+    const currentWindow = this.editorWindow;
+    this.editorWindow = null;
+    if (currentWindow === null) {
+      return;
+    }
+
+    currentWindow.setPreferredOrientation(window.Orientation.PORTRAIT)
+      .catch((error: Object) => {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, 'restore editor window failed: %{public}s', JSON.stringify(error));
+      });
+  }
+
+  private async initializeLayoutRepository(): Promise<void> {
+    try {
+      await layoutRepository.initialize(this.hostContext);
+      this.refreshLayoutSummary();
+    } catch (_) {
+      this.savedLayoutCount = 0;
+      this.currentLayoutName = '布局仓库初始化失败';
+      this.currentLayoutBackgroundImageUri = '';
+      this.currentLayoutControlCount = 0;
+      this.currentLayoutHasBackground = false;
+    }
+  }
+
+  private ensureNativeInputRuntime(): void {
+    const hidState = hidService.getState();
+    if (hidState.connected) {
+      nativeInputRuntimeService.start();
+    } else {
+      nativeInputRuntimeService.stop();
+      if (this.nativeInputEventCount === 0) {
+        this.nativeInputLastEvent = '等待连接设备后启动原生输入监控';
+      }
+    }
+    this.refreshNativeInputState();
+  }
+
+  private refreshNativeInputState(): void {
+    this.nativeInputState = nativeInputRuntimeService.getState();
+    this.nativeInputDeviceCount = this.parseJsonArray(nativeInputRuntimeService.getConnectedGamepadsJson()).length;
+  }
+
+  private refreshLayoutSummary(): void {
+    const layouts = layoutRepository.listLayouts();
+    const currentLayout = layoutRepository.getCurrentLayout();
+    this.savedLayoutCount = layouts.length;
+    if (currentLayout === null) {
+      this.currentLayoutName = '未选择布局';
+      this.currentLayoutBackgroundImageUri = '';
+      this.currentLayoutControlCount = 0;
+      this.currentLayoutHasBackground = false;
+      this.layoutControls = [];
+      this.selectedControlId = '';
+      this.updateControlEditorMessage();
+      return;
+    }
+
+    this.applyLayout(currentLayout);
+  }
+
+  private applyLayout(layout: InputLayout): void {
+    this.currentLayoutName = layout.name;
+    this.currentLayoutBackgroundImageUri = layout.backgroundImageUri;
+    this.currentLayoutHasBackground = layout.backgroundImageUri.length > 0;
+    this.layoutControls = layout.controls.map((control: LayoutControlItem) => this.normalizeEditorControl(control));
+    this.currentLayoutControlCount = this.layoutControls.length;
+    this.syncSelectedControl();
+    this.updateControlEditorMessage();
+  }
+
+  private normalizeEditorControl(control: LayoutControlItem): LayoutControlItem {
+    const normalizedControl = control.clone();
+    normalizedControl.inputKind = this.normalizeControlType(normalizedControl.inputKind, normalizedControl.inputCode);
+    normalizedControl.inputCode = this.normalizeBindingCode(normalizedControl.inputKind, normalizedControl.inputCode);
+    normalizedControl.actionType = this.getActionTypeForControlType(normalizedControl.inputKind);
+    if (normalizedControl.label.trim().length === 0) {
+      normalizedControl.label = this.getControlTypeLabel(normalizedControl.inputKind);
+    }
+    return this.normalizeControlGeometry(normalizedControl);
+  }
+
+  private normalizeControlGeometry(control: LayoutControlItem): LayoutControlItem {
+    let normalizedControl = control.clone();
+    if (this.isRoundControlType(normalizedControl.inputKind)) {
+      const nextSize = Math.max(normalizedControl.width, normalizedControl.height);
+      const size = clampEditorValue(
+        nextSize > 0 ? nextSize : CONTROL_DEFAULT_SIZE,
+        ROUND_CONTROL_MIN_SIZE,
+        CONTROL_MAX_SIZE
+      );
+      normalizedControl.width = size;
+      normalizedControl.height = size;
+    } else if (this.isLookControlType(normalizedControl.inputKind)) {
+      const nextWidth = Math.max(normalizedControl.width, normalizedControl.height);
+      normalizedControl.width = clampEditorValue(
+        nextWidth > 0 ? nextWidth : KEYBOARD_CONTROL_DEFAULT_SIZE,
+        LOOK_CONTROL_MIN_WIDTH,
+        CONTROL_MAX_SIZE
+      );
+      normalizedControl.height = clampEditorValue(
+        Math.round(normalizedControl.width / LOOK_CONTROL_ASPECT_RATIO),
+        LOOK_CONTROL_MIN_HEIGHT,
+        CONTROL_MAX_SIZE
+      );
+    } else if (normalizedControl.inputKind === CONTROL_TYPE_SWIPE) {
+      const nextHeight = normalizedControl.height <= 0 ? CONTROL_SWIPE_DEFAULT_HEIGHT : normalizedControl.height;
+      normalizedControl.height = clampEditorValue(nextHeight, CONTROL_SWIPE_MIN_THICKNESS, CONTROL_SWIPE_MAX_THICKNESS);
+      normalizedControl = this.normalizeSwipeGeometry(normalizedControl);
+    } else {
+      normalizedControl.width = clampEditorValue(normalizedControl.width, CONTROL_MIN_SIZE, CONTROL_MAX_SIZE);
+      normalizedControl.height = clampEditorValue(normalizedControl.height, CONTROL_MIN_SIZE, CONTROL_MAX_SIZE);
+    }
+
+    normalizedControl.x = clampEditorValue(normalizedControl.x, 0, CONTROL_CANVAS_UNITS - normalizedControl.width);
+    normalizedControl.y = clampEditorValue(normalizedControl.y, 0, CONTROL_CANVAS_UNITS - normalizedControl.height);
+    return normalizedControl;
+  }
+
+  private isMoveControlType(controlType: string): boolean {
+    return controlType === CONTROL_TYPE_STICK_MOVE || controlType === CONTROL_TYPE_KEYBOARD_MOVE;
+  }
+
+  private isLookControlType(controlType: string): boolean {
+    return controlType === CONTROL_TYPE_STICK_LOOK || controlType === CONTROL_TYPE_KEYBOARD_LOOK;
+  }
+
+  private isRoundControlType(controlType: string): boolean {
+    return this.isMoveControlType(controlType) || controlType === CONTROL_TYPE_BUTTON;
+  }
+
+  private parseControlPayload(control: LayoutControlItem): ControlPayload {
+    const payload = new ControlPayload();
+    if (control.payloadJson.trim().length === 0) {
+      return payload;
+    }
+
+    try {
+      const rawPayload = JSON.parse(control.payloadJson) as Object;
+      payload.rotation = this.getPayloadNumberField(rawPayload, 'rotation', 0);
+      payload.bindingLabel = this.getPayloadStringField(rawPayload, 'bindingLabel');
+      payload.bindingSource = this.getPayloadStringField(rawPayload, 'bindingSource');
+      payload.directionalKeyCodes = this.getPayloadStringField(rawPayload, 'directionalKeyCodes');
+      payload.directionalKeyLabels = this.getPayloadStringField(rawPayload, 'directionalKeyLabels');
+      payload.swipeStartX = this.getPayloadNumberField(rawPayload, 'swipeStartX', -1);
+      payload.swipeStartY = this.getPayloadNumberField(rawPayload, 'swipeStartY', -1);
+      payload.swipeEndX = this.getPayloadNumberField(rawPayload, 'swipeEndX', -1);
+      payload.swipeEndY = this.getPayloadNumberField(rawPayload, 'swipeEndY', -1);
+      return payload;
+    } catch (_) {
+      return payload;
+    }
+  }
+
+  private getPayloadNumberField(payload: Object, key: string, defaultValue: number): number {
+    const value = Reflect.get(payload, key) as number | string | undefined;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : defaultValue;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : defaultValue;
+    }
+    return defaultValue;
+  }
+
+  private getPayloadStringField(payload: Object, key: string): string {
+    const value = Reflect.get(payload, key) as string | undefined;
+    return typeof value === 'string' ? value : '';
+  }
+
+  private withControlPayload(control: LayoutControlItem, mutator: (payload: ControlPayload) => void): LayoutControlItem {
+    const nextControl = control.clone();
+    const payload = this.parseControlPayload(nextControl);
+    mutator(payload);
+    nextControl.payloadJson = JSON.stringify(payload);
+    return nextControl;
+  }
+
+  private normalizeRotationAngle(angle: number): number {
+    let nextAngle = angle % 360;
+    if (nextAngle > 180) {
+      nextAngle -= 360;
+    }
+    if (nextAngle < -180) {
+      nextAngle += 360;
+    }
+    return Math.round(nextAngle * 10) / 10;
+  }
+
+  private getControlRotationAngle(control: LayoutControlItem): number {
+    const payload = this.parseControlPayload(control);
+    return this.normalizeRotationAngle(this.getPayloadNumberField(payload, 'rotation', 0));
+  }
+
+  private setControlRotationAngle(control: LayoutControlItem, angle: number): LayoutControlItem {
+    return this.withControlPayload(control, (payload: ControlPayload) => {
+      payload.rotation = this.normalizeRotationAngle(angle);
+    });
+  }
+
+  private hasSwipeHandlePositions(control: LayoutControlItem): boolean {
+    const payload = this.parseControlPayload(control);
+    return payload.swipeStartX >= 0 && payload.swipeStartY >= 0 && payload.swipeEndX >= 0 && payload.swipeEndY >= 0;
+  }
+
+  private createSwipeHandlePositions(startX: number, startY: number, endX: number, endY: number): SwipeHandlePositions {
+    return new SwipeHandlePositions(new EditorPoint(startX, startY), new EditorPoint(endX, endY));
+  }
+
+  private getSwipeHandlePositionsFromGeometry(control: LayoutControlItem): SwipeHandlePositions {
+    const centerX = this.getControlCenterX(control);
+    const centerY = this.getControlCenterY(control);
+    const radians = this.getControlRotationAngle(control) * Math.PI / 180;
+    const handleOffset = Math.max(0, control.width / 2 - CONTROL_SWIPE_HANDLE_SIZE / 2);
+    const deltaX = Math.cos(radians) * handleOffset;
+    const deltaY = Math.sin(radians) * handleOffset;
+    return this.createSwipeHandlePositions(centerX - deltaX, centerY - deltaY, centerX + deltaX, centerY + deltaY);
+  }
+
+  private getSwipeHandlePositions(control: LayoutControlItem): SwipeHandlePositions {
+    if (this.hasSwipeHandlePositions(control)) {
+      const payload = this.parseControlPayload(control);
+      return this.createSwipeHandlePositions(payload.swipeStartX, payload.swipeStartY, payload.swipeEndX, payload.swipeEndY);
+    }
+    return this.getSwipeHandlePositionsFromGeometry(control);
+  }
+
+  private getSwipeHandleDistance(positions: SwipeHandlePositions): number {
+    const deltaX = positions.end.x - positions.start.x;
+    const deltaY = positions.end.y - positions.start.y;
+    return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+  }
+
+  private clampSwipeMovingPointWithFixedHandle(fixedPoint: EditorPoint, movingPoint: EditorPoint, fixedHandle: string,
+    thickness: number): EditorPoint {
+    const minDistance = CONTROL_SWIPE_MIN_LENGTH - CONTROL_SWIPE_HANDLE_SIZE;
+    const maxDistance = CONTROL_SWIPE_MAX_LENGTH - CONTROL_SWIPE_HANDLE_SIZE;
+    let nextMovingPoint = movingPoint.clone();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let deltaX = nextMovingPoint.x - fixedPoint.x;
+      let deltaY = nextMovingPoint.y - fixedPoint.y;
+      let distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      if (distance < 1) {
+        nextMovingPoint = fixedHandle === 'start'
+          ? new EditorPoint(fixedPoint.x + minDistance, fixedPoint.y)
+          : new EditorPoint(fixedPoint.x - minDistance, fixedPoint.y);
+        deltaX = nextMovingPoint.x - fixedPoint.x;
+        deltaY = nextMovingPoint.y - fixedPoint.y;
+        distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      }
+
+      const targetDistance = clampEditorValue(Math.round(distance), minDistance, maxDistance);
+      if (Math.abs(targetDistance - distance) > 0.01) {
+        const scale = targetDistance / distance;
+        nextMovingPoint = new EditorPoint(fixedPoint.x + deltaX * scale, fixedPoint.y + deltaY * scale);
+        deltaX = nextMovingPoint.x - fixedPoint.x;
+        deltaY = nextMovingPoint.y - fixedPoint.y;
+        distance = targetDistance;
+      }
+
+      const totalWidth = distance + CONTROL_SWIPE_HANDLE_SIZE;
+      const centerX = (fixedPoint.x + nextMovingPoint.x) / 2;
+      const centerY = (fixedPoint.y + nextMovingPoint.y) / 2;
+      const left = centerX - totalWidth / 2;
+      const top = centerY - thickness / 2;
+      let shiftX = 0;
+      let shiftY = 0;
+      if (left < 0) {
+        shiftX = -left;
+      } else if (left + totalWidth > CONTROL_CANVAS_UNITS) {
+        shiftX = CONTROL_CANVAS_UNITS - (left + totalWidth);
+      }
+      if (top < 0) {
+        shiftY = -top;
+      } else if (top + thickness > CONTROL_CANVAS_UNITS) {
+        shiftY = CONTROL_CANVAS_UNITS - (top + thickness);
+      }
+      if (shiftX === 0 && shiftY === 0) {
+        break;
+      }
+
+      nextMovingPoint = new EditorPoint(
+        clampEditorValue(nextMovingPoint.x + shiftX * 2, 0, CONTROL_CANVAS_UNITS),
+        clampEditorValue(nextMovingPoint.y + shiftY * 2, 0, CONTROL_CANVAS_UNITS)
+      );
+    }
+    return nextMovingPoint;
+  }
+
+  private clampSwipeHandlePositions(positions: SwipeHandlePositions, thickness: number, fixedHandle: string = ''): SwipeHandlePositions {
+    let start = positions.start.clone();
+    let end = positions.end.clone();
+    if (fixedHandle === 'start' || fixedHandle === 'end') {
+      const fixedPoint = fixedHandle === 'start' ? start.clone() : end.clone();
+      const adjustedMovingPoint = fixedHandle === 'start'
+        ? this.clampSwipeMovingPointWithFixedHandle(fixedPoint, end.clone(), fixedHandle, thickness)
+        : this.clampSwipeMovingPointWithFixedHandle(fixedPoint, start.clone(), fixedHandle, thickness);
+      return fixedHandle === 'start'
+        ? new SwipeHandlePositions(fixedPoint, adjustedMovingPoint)
+        : new SwipeHandlePositions(adjustedMovingPoint, fixedPoint);
+    }
+
+    let deltaX = end.x - start.x;
+    let deltaY = end.y - start.y;
+    let distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    const minDistance = CONTROL_SWIPE_MIN_LENGTH - CONTROL_SWIPE_HANDLE_SIZE;
+    const maxDistance = CONTROL_SWIPE_MAX_LENGTH - CONTROL_SWIPE_HANDLE_SIZE;
+    if (distance < 1) {
+      end = new EditorPoint(start.x + minDistance, start.y);
+      deltaX = minDistance;
+      deltaY = 0;
+      distance = minDistance;
+    }
+
+    const targetDistance = clampEditorValue(Math.round(distance), minDistance, maxDistance);
+    if (Math.abs(targetDistance - distance) > 0.01) {
+      const centerX = (start.x + end.x) / 2;
+      const centerY = (start.y + end.y) / 2;
+      const scale = targetDistance / distance;
+      const halfDeltaX = deltaX * scale / 2;
+      const halfDeltaY = deltaY * scale / 2;
+      start = new EditorPoint(centerX - halfDeltaX, centerY - halfDeltaY);
+      end = new EditorPoint(centerX + halfDeltaX, centerY + halfDeltaY);
+      deltaX = end.x - start.x;
+      deltaY = end.y - start.y;
+      distance = targetDistance;
+    }
+
+    const totalWidth = distance + CONTROL_SWIPE_HANDLE_SIZE;
+    const centerX = (start.x + end.x) / 2;
+    const centerY = (start.y + end.y) / 2;
+    const left = centerX - totalWidth / 2;
+    const top = centerY - thickness / 2;
+    let shiftX = 0;
+    let shiftY = 0;
+    if (left < 0) {
+      shiftX = -left;
+    } else if (left + totalWidth > CONTROL_CANVAS_UNITS) {
+      shiftX = CONTROL_CANVAS_UNITS - (left + totalWidth);
+    }
+    if (top < 0) {
+      shiftY = -top;
+    } else if (top + thickness > CONTROL_CANVAS_UNITS) {
+      shiftY = CONTROL_CANVAS_UNITS - (top + thickness);
+    }
+    if (shiftX !== 0 || shiftY !== 0) {
+      start = new EditorPoint(start.x + shiftX, start.y + shiftY);
+      end = new EditorPoint(end.x + shiftX, end.y + shiftY);
+    }
+    return new SwipeHandlePositions(start, end);
+  }
+
+  private writeSwipeHandlePositions(control: LayoutControlItem, positions: SwipeHandlePositions): LayoutControlItem {
+    return this.withControlPayload(control, (payload: ControlPayload) => {
+      payload.swipeStartX = Math.round(positions.start.x);
+      payload.swipeStartY = Math.round(positions.start.y);
+      payload.swipeEndX = Math.round(positions.end.x);
+      payload.swipeEndY = Math.round(positions.end.y);
+    });
+  }
+
+  private applySwipeHandlePositions(control: LayoutControlItem, positions: SwipeHandlePositions, fixedHandle: string = ''): LayoutControlItem {
+    const thickness = clampEditorValue(control.height <= 0 ? CONTROL_SWIPE_DEFAULT_HEIGHT : control.height,
+      CONTROL_SWIPE_MIN_THICKNESS, CONTROL_SWIPE_MAX_THICKNESS);
+    const normalizedPositions = this.clampSwipeHandlePositions(positions, thickness, fixedHandle);
+    const deltaX = normalizedPositions.end.x - normalizedPositions.start.x;
+    const deltaY = normalizedPositions.end.y - normalizedPositions.start.y;
+    const distance = this.getSwipeHandleDistance(normalizedPositions);
+    let nextControl = control.clone();
+    nextControl.width = Math.round(distance + CONTROL_SWIPE_HANDLE_SIZE);
+    nextControl.height = thickness;
+    const centerX = (normalizedPositions.start.x + normalizedPositions.end.x) / 2;
+    const centerY = (normalizedPositions.start.y + normalizedPositions.end.y) / 2;
+    nextControl.x = Math.round(centerX - nextControl.width / 2);
+    nextControl.y = Math.round(centerY - nextControl.height / 2);
+    nextControl = this.setControlRotationAngle(nextControl, Math.atan2(deltaY, deltaX) * 180 / Math.PI);
+    nextControl = this.writeSwipeHandlePositions(nextControl, normalizedPositions);
+    return nextControl;
+  }
+
+  private normalizeSwipeGeometry(control: LayoutControlItem): LayoutControlItem {
+    return this.applySwipeHandlePositions(control, this.getSwipeHandlePositions(control));
+  }
+
+  private getStoredBindingLabel(control: LayoutControlItem): string {
+    const payload = this.parseControlPayload(control);
+    return this.formatBindingDisplayName(this.getPayloadStringField(payload, 'bindingLabel'));
+  }
+
+  private hasControlBinding(control: LayoutControlItem): boolean {
+    return this.normalizeBindingCode(control.inputKind, control.inputCode).length > 0 || this.getStoredBindingLabel(control).length > 0;
+  }
+
+  private getUnboundBindingHint(control: LayoutControlItem): string {
+    switch (control.inputKind) {
+      case CONTROL_TYPE_BUTTON:
+        return '未绑定，按下按键绑定。';
+      case CONTROL_TYPE_STICK_MOVE:
+      case CONTROL_TYPE_STICK_LOOK:
+        return '未绑定，晃动摇杆绑定。';
+      case CONTROL_TYPE_KEYBOARD_MOVE:
+      case CONTROL_TYPE_KEYBOARD_LOOK:
+        return '未绑定，连按四键绑定。';
+      case CONTROL_TYPE_SWIPE:
+        return '未绑定，推动摇杆或扳机绑定。';
+      default:
+        return '未绑定，输入操作完成绑定。';
+    }
+  }
+
+  private isDirectionalKeyboardControlType(controlType: string): boolean {
+    return controlType === CONTROL_TYPE_KEYBOARD_MOVE || controlType === CONTROL_TYPE_KEYBOARD_LOOK;
+  }
+
+  private resetPendingDirectionalBinding(): void {
+    this.pendingDirectionalKeyCodes = [];
+    this.pendingDirectionalKeyLabels = [];
+  }
+
+  private hasPendingDirectionalKeyCode(keyCode: number): boolean {
+    return this.pendingDirectionalKeyCodes.some((recordedKeyCode: number) => recordedKeyCode === keyCode);
+  }
+
+  private getDirectionalBindingToken(keyText: string, keyCode: number): string {
+    const formattedKeyText = this.formatBindingDisplayName(keyText);
+    if (formattedKeyText.length > 0) {
+      return formattedKeyText;
+    }
+    return `${keyCode}`;
+  }
+
+  private normalizeDirectionalDisplayToken(rawToken: string): string {
+    const trimmedToken = rawToken.trim();
+    switch (trimmedToken) {
+      case '方向上':
+        return '方向上';
+      case '方向下':
+        return '方向下';
+      case '方向左':
+        return '方向左';
+      case '方向右':
+        return '方向右';
+      default:
+        break;
+    }
+
+    const normalizedToken = trimmedToken.replace(/[_\s-]+/g, '').toUpperCase();
+    switch (normalizedToken) {
+      case 'UP':
+      case 'ARROWUP':
+      case 'DPADUP':
+        return '方向上';
+      case 'DOWN':
+      case 'ARROWDOWN':
+      case 'DPADDOWN':
+        return '方向下';
+      case 'LEFT':
+      case 'ARROWLEFT':
+      case 'DPADLEFT':
+        return '方向左';
+      case 'RIGHT':
+      case 'ARROWRIGHT':
+      case 'DPADRIGHT':
+        return '方向右';
+      default:
+        return '';
+    }
+  }
+
+  private buildDirectionalBindingLabel(keyLabels: Array<string>): string {
+    return DIRECTIONAL_BINDING_ORDER_LABELS.map((directionLabel: string, index: number) => {
+      const keyLabel = index < keyLabels.length ? keyLabels[index] : '?';
+      return `${directionLabel}:${keyLabel}`;
+    }).join(' ');
+  }
+
+  private updateDirectionalBindingHint(control: LayoutControlItem): void {
+    if (!this.isDirectionalKeyboardControlType(control.inputKind)) {
+      return;
+    }
+
+    if (this.pendingDirectionalKeyLabels.length === 0) {
+      this.bindingCaptureHint = '未绑定，连按四键绑定（依次上、左、下、右）。';
+      return;
+    }
+
+    const capturedLabels = DIRECTIONAL_BINDING_ORDER_LABELS.slice(0, this.pendingDirectionalKeyLabels.length)
+      .map((directionLabel: string, index: number) => `${directionLabel}:${this.pendingDirectionalKeyLabels[index]}`)
+      .join(' ');
+    const remainingLabels = DIRECTIONAL_BINDING_ORDER_LABELS.slice(this.pendingDirectionalKeyLabels.length).join('、');
+    if (remainingLabels.length > 0) {
+      this.bindingCaptureHint = `已记录 ${capturedLabels}，继续按 ${remainingLabels}。`;
+      return;
+    }
+    this.bindingCaptureHint = `已记录 ${capturedLabels}，正在完成绑定。`;
+  }
+
+  private looksLikeGamepadKeyName(rawName: string): boolean {
+    const normalizedName = rawName.trim().toUpperCase();
+    return normalizedName.includes('KEYCODE_BUTTON_') || normalizedName.includes('KEYCODE_GAMEPAD_') ||
+      normalizedName.startsWith('BUTTON_') || normalizedName.startsWith('GAMEPAD_');
+  }
+
+  private stripBindingNamePrefixes(rawName: string): string {
+    let normalizedName = rawName.trim().replace(/-/g, '_').toUpperCase();
+    const prefixes = ['KEYCODE_BUTTON_', 'KEYCODE_GAMEPAD_', 'KEYCODE_', 'GAMEPAD_BUTTON_', 'GAMEPAD_', 'BUTTON_'];
+    let updated = true;
+    while (updated) {
+      updated = false;
+      for (const prefix of prefixes) {
+        if (normalizedName.startsWith(prefix)) {
+          normalizedName = normalizedName.substring(prefix.length);
+          updated = true;
+        }
+      }
+    }
+    return normalizedName;
+  }
+
+  private toCompactBindingToken(token: string): string {
+    switch (token) {
+      case 'LEFT_SHOULDER':
+      case 'L1':
+        return 'L1';
+      case 'RIGHT_SHOULDER':
+      case 'R1':
+        return 'R1';
+      case 'LEFT_TRIGGER':
+      case 'L2':
+        return 'L2';
+      case 'RIGHT_TRIGGER':
+      case 'R2':
+        return 'R2';
+      case 'LEFT_THUMBSTICK':
+      case 'THUMBL':
+      case 'L3':
+        return 'L3';
+      case 'RIGHT_THUMBSTICK':
+      case 'THUMBR':
+      case 'R3':
+        return 'R3';
+      case 'DPAD_UP':
+        return 'UP';
+      case 'DPAD_DOWN':
+        return 'DOWN';
+      case 'DPAD_LEFT':
+        return 'LEFT';
+      case 'DPAD_RIGHT':
+        return 'RIGHT';
+      case 'MENU':
+        return 'START';
+      case 'SELECT':
+      case 'BACK':
+        return 'SELECT';
+      default:
+        return token;
+    }
+  }
+
+  private formatBindingDisplayToken(rawToken: string): string {
+    const trimmedToken = rawToken.trim();
+    if (trimmedToken.length === 0) {
+      return '';
+    }
+    const directionalLabel = this.normalizeDirectionalDisplayToken(trimmedToken);
+    if (directionalLabel.length > 0) {
+      return directionalLabel;
+    }
+    if (/.*[\u4E00-\u9FFF].*/.test(trimmedToken)) {
+      return trimmedToken;
+    }
+
+    const compactToken = this.toCompactBindingToken(this.stripBindingNamePrefixes(trimmedToken));
+    const compactDirectionalLabel = this.normalizeDirectionalDisplayToken(compactToken);
+    if (compactDirectionalLabel.length > 0) {
+      return compactDirectionalLabel;
+    }
+    if (/^[A-Z0-9]+$/.test(compactToken)) {
+      return compactToken;
+    }
+    return compactToken.replace(/_/g, ' ');
+  }
+
+  private formatBindingDisplayName(rawName: string): string {
+    const trimmedName = rawName.trim();
+    if (trimmedName.length === 0) {
+      return '';
+    }
+
+    const normalizedTokens = trimmedName.split(/\s+/)
+      .map((token: string) => this.formatBindingDisplayToken(token))
+      .filter((token: string) => token.length > 0);
+    return normalizedTokens.join(' ');
+  }
+
+  private tryMapGamepadButtonBindingFromKeyName(rawName: string): string {
+    if (!this.looksLikeGamepadKeyName(rawName)) {
+      return '';
+    }
+
+    switch (this.toCompactBindingToken(this.stripBindingNamePrefixes(rawName))) {
+      case 'A':
+        return 'button-a';
+      case 'B':
+        return 'button-b';
+      case 'X':
+        return 'button-x';
+      case 'Y':
+        return 'button-y';
+      case 'L1':
+        return 'button-l1';
+      case 'R1':
+        return 'button-r1';
+      case 'L2':
+        return 'button-l2';
+      case 'R2':
+        return 'button-r2';
+      case 'START':
+        return 'button-start';
+      case 'SELECT':
+        return 'button-select';
+      case 'UP':
+        return 'button-dpad-up';
+      case 'DOWN':
+        return 'button-dpad-down';
+      case 'LEFT':
+        return 'button-dpad-left';
+      case 'RIGHT':
+        return 'button-dpad-right';
+      default:
+        return '';
+    }
+  }
+
+  private normalizeControlType(inputKind: string, inputCode: string): string {
+    switch (inputKind) {
+      case CONTROL_TYPE_STICK_MOVE:
+      case CONTROL_TYPE_STICK_LOOK:
+      case CONTROL_TYPE_KEYBOARD_MOVE:
+      case CONTROL_TYPE_KEYBOARD_LOOK:
+      case CONTROL_TYPE_BUTTON:
+      case CONTROL_TYPE_SWIPE:
+        return inputKind;
+      case 'stick':
+        return inputCode === 'right-stick' ? CONTROL_TYPE_STICK_LOOK : CONTROL_TYPE_STICK_MOVE;
+      case 'dpad':
+        return CONTROL_TYPE_KEYBOARD_MOVE;
+      case 'button':
+        return CONTROL_TYPE_BUTTON;
+      default:
+        return CONTROL_TYPE_BUTTON;
+    }
+  }
+
+  private normalizeBindingCode(controlType: string, bindingCode: string): string {
+    switch (bindingCode) {
+      case 'left-stick':
+        return 'axis-left-stick';
+      case 'right-stick':
+        return 'axis-right-stick';
+      case 'gamepad-a':
+        return 'button-a';
+      case 'gamepad-b':
+        return 'button-b';
+      case 'gamepad-x':
+        return 'button-x';
+      case 'gamepad-y':
+        return 'button-y';
+      case 'gamepad-l1':
+        return 'button-l1';
+      case 'gamepad-r1':
+        return 'button-r1';
+      case 'gamepad-l2':
+        return controlType === CONTROL_TYPE_SWIPE ? 'axis-left-trigger' : 'button-l2';
+      case 'gamepad-r2':
+        return controlType === CONTROL_TYPE_SWIPE ? 'axis-right-trigger' : 'button-r2';
+      case 'gamepad-start':
+        return 'button-start';
+      case 'gamepad-select':
+        return 'button-select';
+      case 'gamepad-dpad':
+        return 'keys-arrows';
+      default:
+        return bindingCode;
+    }
+  }
+
+  private getActionTypeForControlType(controlType: string): string {
+    return controlType === CONTROL_TYPE_SWIPE ? 'swipe' : 'touch';
+  }
+
+  private getControlTypeLabel(controlType: string): string {
+    switch (controlType) {
+      case CONTROL_TYPE_STICK_MOVE:
+        return '摇杆移动';
+      case CONTROL_TYPE_STICK_LOOK:
+        return '摇杆视角';
+      case CONTROL_TYPE_KEYBOARD_MOVE:
+        return '键盘移动';
+      case CONTROL_TYPE_KEYBOARD_LOOK:
+        return '键盘视角';
+      case CONTROL_TYPE_BUTTON:
+        return '按钮';
+      case CONTROL_TYPE_SWIPE:
+        return '滑动';
+      default:
+        return '控件';
+    }
+  }
+
+  private getBindingOptionsForControlType(controlType: string): Array<BindingOption> {
+    switch (controlType) {
+      case CONTROL_TYPE_STICK_MOVE:
+        return STICK_MOVE_BINDINGS;
+      case CONTROL_TYPE_STICK_LOOK:
+        return STICK_LOOK_BINDINGS;
+      case CONTROL_TYPE_KEYBOARD_MOVE:
+        return KEYBOARD_MOVE_BINDINGS;
+      case CONTROL_TYPE_KEYBOARD_LOOK:
+        return KEYBOARD_LOOK_BINDINGS;
+      case CONTROL_TYPE_BUTTON:
+        return BUTTON_BINDINGS;
+      case CONTROL_TYPE_SWIPE:
+        return SWIPE_BINDINGS;
+      default:
+        return BUTTON_BINDINGS;
+    }
+  }
+
+  private getBindingLabel(bindingCode: string): string {
+    if (bindingCode.length === 0) {
+      return '未绑定';
+    }
+
+    for (const option of ALL_BINDING_OPTIONS) {
+      if (option.code === bindingCode) {
+        return option.label;
+      }
+    }
+
+    if (bindingCode === 'axis-left-stick-x') {
+      return '左摇杆 X 轴';
+    }
+    if (bindingCode === 'axis-left-stick-y') {
+      return '左摇杆 Y 轴';
+    }
+    if (bindingCode === 'axis-right-stick-x') {
+      return '右摇杆 X 轴';
+    }
+    if (bindingCode === 'axis-right-stick-y') {
+      return '右摇杆 Y 轴';
+    }
+    if (bindingCode.startsWith('key-')) {
+      return `键盘 ${bindingCode.substring(4)}`;
+    }
+    if (bindingCode.startsWith('mouse-button-')) {
+      return `鼠标${bindingCode.substring('mouse-button-'.length)}`;
+    }
+    if (bindingCode.startsWith('mouse-move-')) {
+      return bindingCode.endsWith('-x') ? '鼠标移动 X' : '鼠标移动 Y';
+    }
+    return this.formatBindingDisplayName(bindingCode);
+  }
+
+  private getControlBindingLabel(control: LayoutControlItem): string {
+    const storedBindingLabel = this.getStoredBindingLabel(control);
+    if (storedBindingLabel.length > 0) {
+      return storedBindingLabel;
+    }
+    return this.getBindingLabel(this.normalizeBindingCode(control.inputKind, control.inputCode));
+  }
+
+  private getControlBindingCaptionText(control: LayoutControlItem): string {
+    if (control.id === this.selectedControlId && this.isBindingCaptureListening() && !this.hasControlBinding(control)) {
+      return this.bindingCaptureHint;
+    }
+    return this.getControlBindingLabel(control);
+  }
+
+  private getSelectedBindingOptions(): Array<BindingOption> {
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return [];
+    }
+    return this.getBindingOptionsForControlType(selectedControl.inputKind);
+  }
+
+  private async bindSelectedControl(bindingCode: string, bindingLabel: string, sourceLabel: string): Promise<void> {
+    const selectedControl = this.getSelectedControl();
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (selectedControl === null || currentLayout === null) {
+      return;
+    }
+
+    const formattedBindingLabel = this.formatBindingDisplayName(bindingLabel);
+    const formattedSourceLabel = this.formatBindingDisplayName(sourceLabel);
+
+    let boundControl = selectedControl.clone();
+    boundControl.inputKind = this.normalizeControlType(boundControl.inputKind, boundControl.inputCode);
+    boundControl.inputCode = bindingCode;
+    boundControl.actionType = this.getActionTypeForControlType(boundControl.inputKind);
+    boundControl = this.withControlPayload(boundControl, (payload: ControlPayload) => {
+      payload.bindingLabel = formattedBindingLabel;
+      payload.bindingSource = formattedSourceLabel;
+      payload.directionalKeyCodes = '';
+      payload.directionalKeyLabels = '';
+    });
+    await this.replaceSelectedControl(currentLayout, boundControl);
+    this.resetPendingDirectionalBinding();
+    this.bindingCaptureState = 'bound';
+    this.bindingCaptureTargetId = boundControl.id;
+    this.bindingCaptureHint = `已绑定 ${formattedBindingLabel}，来源 ${formattedSourceLabel}。`;
+    this.updateControlEditorMessage();
+  }
+
+  private async bindSelectedDirectionalKeys(keyCodes: Array<number>, keyLabels: Array<string>): Promise<void> {
+    const selectedControl = this.getSelectedControl();
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (selectedControl === null || currentLayout === null || !this.isDirectionalKeyboardControlType(selectedControl.inputKind)) {
+      return;
+    }
+
+    const bindingCode = selectedControl.inputKind === CONTROL_TYPE_KEYBOARD_MOVE ? 'keys-directional-move' : 'keys-directional-look';
+    const bindingLabel = this.buildDirectionalBindingLabel(keyLabels);
+    let boundControl = selectedControl.clone();
+    boundControl.inputKind = this.normalizeControlType(boundControl.inputKind, boundControl.inputCode);
+    boundControl.inputCode = bindingCode;
+    boundControl.actionType = this.getActionTypeForControlType(boundControl.inputKind);
+    boundControl = this.withControlPayload(boundControl, (payload: ControlPayload) => {
+      payload.bindingLabel = bindingLabel;
+      payload.bindingSource = '键盘';
+      payload.directionalKeyCodes = keyCodes.join(',');
+      payload.directionalKeyLabels = keyLabels.join(',');
+    });
+    await this.replaceSelectedControl(currentLayout, boundControl);
+    this.resetPendingDirectionalBinding();
+    this.bindingCaptureState = 'bound';
+    this.bindingCaptureTargetId = boundControl.id;
+    this.bindingCaptureHint = `已完成四向绑定 ${bindingLabel}。`;
+    this.updateControlEditorMessage();
+  }
+
+  private async clearSelectedBinding(): Promise<void> {
+    const selectedControl = this.getSelectedControl();
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (selectedControl === null || currentLayout === null) {
+      return;
+    }
+
+    let clearedControl = selectedControl.clone();
+    clearedControl.inputKind = this.normalizeControlType(clearedControl.inputKind, clearedControl.inputCode);
+    clearedControl.inputCode = '';
+    clearedControl.actionType = this.getActionTypeForControlType(clearedControl.inputKind);
+    clearedControl = this.withControlPayload(clearedControl, (payload: ControlPayload) => {
+      payload.bindingLabel = '';
+      payload.bindingSource = '';
+      payload.directionalKeyCodes = '';
+      payload.directionalKeyLabels = '';
+    });
+    await this.replaceSelectedControl(currentLayout, clearedControl);
+    this.armBindingCapture(clearedControl.id);
+    this.updateControlEditorMessage();
+  }
+
+  private syncSelectedControl(): void {
+    if (this.layoutControls.length === 0) {
+      this.selectedControlId = '';
+      this.bindingCaptureState = 'idle';
+      this.bindingCaptureTargetId = '';
+      this.bindingCaptureHint = '选中控件后，按手柄、键盘或鼠标完成绑定。';
+      return;
+    }
+
+    const previousSelectedControlId = this.selectedControlId;
+    const hasSelectedControl = this.layoutControls.some((control: LayoutControlItem) => control.id === this.selectedControlId);
+    if (!hasSelectedControl) {
+      this.selectedControlId = this.layoutControls[0].id;
+    }
+
+    if (this.selectedControlId !== previousSelectedControlId || this.bindingCaptureTargetId.length === 0) {
+      this.armBindingCapture(this.selectedControlId);
+    }
+  }
+
+  private updateControlEditorMessage(): void {
+    if (!this.currentLayoutHasBackground) {
+      this.controlEditorMessage = '先导入背景图，再添加控件。';
+      return;
+    }
+
+    if (this.layoutControls.length === 0) {
+      this.controlEditorMessage = '当前布局还没有控件，可以先添加一种控件类型。';
+      return;
+    }
+
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      this.controlEditorMessage = '请选择一个控件，系统会直接开始监听绑定输入。';
+      return;
+    }
+
+    const gestureHint = selectedControl.inputKind === CONTROL_TYPE_SWIPE
+      ? '拖动两端圆点可拉伸并改变角度，双指捏合可整体缩放。'
+      : '单指拖动位置，双指捏合缩放。';
+    this.controlEditorMessage = `当前选中 ${selectedControl.label}，已绑定 ${this.getControlBindingLabel(selectedControl)}，位置 ${Math.round(selectedControl.x / 10)}%, ${Math.round(selectedControl.y / 10)}%，尺寸 ${Math.round(selectedControl.width / 10)}% x ${Math.round(selectedControl.height / 10)}%。${this.bindingCaptureHint}${gestureHint}`;
+  }
+
+  private getSelectedControl(): LayoutControlItem | null {
+    for (const control of this.layoutControls) {
+      if (control.id === this.selectedControlId) {
+        return control.clone();
+      }
+    }
+    return null;
+  }
+
+  private hasSelectedControl(): boolean {
+    return this.getSelectedControl() !== null;
+  }
+
+  private selectControl(controlId: string): void {
+    const selectionChanged = this.selectedControlId !== controlId;
+    this.selectedControlId = controlId;
+    if (selectionChanged || this.bindingCaptureTargetId !== controlId || this.bindingCaptureState === 'idle') {
+      this.armBindingCapture(controlId);
+    }
+    this.updateControlEditorMessage();
+  }
+
+  private armBindingCapture(controlId: string): void {
+    const control = this.findLocalControl(controlId);
+    if (control === null) {
+      return;
+    }
+
+    this.resetPendingDirectionalBinding();
+    this.bindingCaptureState = 'listening';
+    this.bindingCaptureTargetId = controlId;
+    if (this.isDirectionalKeyboardControlType(control.inputKind)) {
+      this.updateDirectionalBindingHint(control);
+      return;
+    }
+    if (!this.hasControlBinding(control)) {
+      this.bindingCaptureHint = this.getUnboundBindingHint(control);
+      return;
+    }
+    this.bindingCaptureHint = `正在监听 ${control.label} 的输入，输入新的操作可重新绑定。`;
+  }
+
+  private isBindingCaptureListening(): boolean {
+    return this.bindingCaptureState === 'listening' && this.bindingCaptureTargetId === this.selectedControlId;
+  }
+
+  private async addControlFromLibrary(libraryItem: ControlLibraryItem): Promise<void> {
+    if (!this.currentLayoutHasBackground) {
+      await this.showActionError('无法添加控件', '请先为当前布局导入背景图，再开始布置控件。');
+      return;
+    }
+
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (currentLayout === null) {
+      await this.showActionError('无法添加控件', '当前没有可编辑的布局。');
+      return;
+    }
+
+    const nextIndex = this.getNextControlIndexForType(libraryItem.controlType, currentLayout.controls);
+    const defaultSize = libraryItem.defaultSize;
+    const controlWidth = libraryItem.controlType === CONTROL_TYPE_SWIPE ? CONTROL_SWIPE_DEFAULT_WIDTH : defaultSize;
+    const controlHeight = libraryItem.controlType === CONTROL_TYPE_SWIPE ? CONTROL_SWIPE_DEFAULT_HEIGHT : defaultSize;
+    const control = new LayoutControlItem(
+      `control-${Date.now()}`,
+      `${libraryItem.label} ${nextIndex}`,
+      libraryItem.controlType,
+      '',
+      libraryItem.actionType,
+      Math.round((CONTROL_CANVAS_UNITS - controlWidth) / 2),
+      Math.round((CONTROL_CANVAS_UNITS - controlHeight) / 2),
+      controlWidth,
+      controlHeight,
+      libraryItem.controlType === CONTROL_TYPE_SWIPE ? JSON.stringify({ rotation: 0 }) : ''
+    );
+
+    const updatedLayout = currentLayout.clone();
+    updatedLayout.controls.push(control);
+    updatedLayout.updatedAt = Date.now();
+    this.controlLibraryExpanded = false;
+    this.menuExpanded = true;
+    await this.persistLayout(updatedLayout, control.id);
+  }
+
+  private getNextControlIndexForType(controlType: string, controls: Array<LayoutControlItem>): number {
+    let sameTypeCount = 0;
+    for (const control of controls) {
+      if (this.normalizeControlType(control.inputKind, control.inputCode) === controlType) {
+        sameTypeCount += 1;
+      }
+    }
+    return sameTypeCount + 1;
+  }
+
+  private async removeSelectedControl(): Promise<void> {
+    const selectedControl = this.getSelectedControl();
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (selectedControl === null || currentLayout === null) {
+      return;
+    }
+
+    const nextControls = currentLayout.controls.filter((control: LayoutControlItem) => control.id !== selectedControl.id)
+      .map((control: LayoutControlItem) => control.clone());
+    const updatedLayout = currentLayout.clone();
+    updatedLayout.controls = nextControls;
+    updatedLayout.updatedAt = Date.now();
+    const nextSelectedControlId = nextControls.length > 0 ? nextControls[0].id : '';
+    await this.persistLayout(updatedLayout, nextSelectedControlId);
+  }
+
+  private handleControlTouch(controlId: string, event: Object): void {
+    if (this.resizingSwipeControlId.length > 0 || this.pinchingControlId.length > 0) {
+      return;
+    }
+
+    const action = this.readTouchAction(event);
+    if (action === TOUCH_ACTION_DOWN) {
+      this.startControlDrag(controlId, event);
+    }
+  }
+
+  private handleCanvasTouch(event: Object): void {
+    if (this.draggingMenuButton) {
+      return;
+    }
+
+    const action = this.readTouchAction(event);
+    if (action === TOUCH_ACTION_DOWN) {
+      if (this.draggingControlId.length === 0 && this.resizingSwipeControlId.length === 0 && this.pinchingControlId.length === 0 &&
+        this.selectedControlId.length > 0) {
+        this.startControlDrag(this.selectedControlId, event);
+      }
+      return;
+    }
+
+    if (this.draggingControlId.length === 0) {
+      if (this.resizingSwipeControlId.length === 0) {
+        return;
+      }
+    }
+    if (action === TOUCH_ACTION_MOVE) {
+      if (this.resizingSwipeControlId.length > 0) {
+        this.updateSwipeHandleDrag(this.resizingSwipeControlId, event);
+        return;
+      }
+      this.updateControlDrag(this.draggingControlId, event);
+      return;
+    }
+
+    if (action === TOUCH_ACTION_UP || action === TOUCH_ACTION_CANCEL) {
+      if (this.resizingSwipeControlId.length > 0) {
+        this.finishSwipeHandleDrag(this.resizingSwipeControlId);
+        return;
+      }
+      this.finishControlDrag(this.draggingControlId);
+    }
+  }
+
+  private startControlDrag(controlId: string, event: Object): void {
+    const selectedControl = this.findLocalControl(controlId);
+    if (selectedControl === null) {
+      return;
+    }
+
+    this.selectControl(controlId);
+    this.controlLibraryExpanded = false;
+    this.draggingControlId = controlId;
+    this.dragStartWindowX = this.readTouchWindowX(event);
+    this.dragStartWindowY = this.readTouchWindowY(event);
+    this.dragStartControlX = selectedControl.x;
+    this.dragStartControlY = selectedControl.y;
+    if (selectedControl.inputKind === CONTROL_TYPE_SWIPE) {
+      const positions = this.getSwipeHandlePositions(selectedControl);
+      this.dragStartSwipeStartPoint = positions.start.clone();
+      this.dragStartSwipeEndPoint = positions.end.clone();
+    }
+  }
+
+  private updateControlDrag(controlId: string, event: Object): void {
+    if (this.draggingControlId !== controlId) {
+      return;
+    }
+
+    const draggingControl = this.findLocalControl(controlId);
+    if (draggingControl === null) {
+      return;
+    }
+
+    const currentWindowX = this.readTouchWindowX(event);
+    const currentWindowY = this.readTouchWindowY(event);
+    const deltaXUnits = (currentWindowX - this.dragStartWindowX) / Math.max(this.canvasWidthPx, 1) * CONTROL_CANVAS_UNITS;
+    const deltaYUnits = (currentWindowY - this.dragStartWindowY) / Math.max(this.canvasHeightPx, 1) * CONTROL_CANVAS_UNITS;
+    if (draggingControl.inputKind === CONTROL_TYPE_SWIPE) {
+      const nextPositions = new SwipeHandlePositions(
+        new EditorPoint(this.dragStartSwipeStartPoint.x + deltaXUnits, this.dragStartSwipeStartPoint.y + deltaYUnits),
+        new EditorPoint(this.dragStartSwipeEndPoint.x + deltaXUnits, this.dragStartSwipeEndPoint.y + deltaYUnits)
+      );
+      let nextSwipeControl = draggingControl.clone();
+      nextSwipeControl = this.applySwipeHandlePositions(nextSwipeControl, nextPositions);
+      this.updateLocalControl(nextSwipeControl, false);
+      return;
+    }
+
+    const nextControl = draggingControl.clone();
+    nextControl.x = clampEditorValue(Math.round(this.dragStartControlX + deltaXUnits), 0, CONTROL_CANVAS_UNITS - nextControl.width);
+    nextControl.y = clampEditorValue(Math.round(this.dragStartControlY + deltaYUnits), 0, CONTROL_CANVAS_UNITS - nextControl.height);
+    this.updateLocalControl(nextControl);
+  }
+
+  private finishControlDrag(controlId: string): void {
+    if (this.draggingControlId !== controlId) {
+      return;
+    }
+
+    this.draggingControlId = '';
+    this.persistCurrentLayoutControls();
+  }
+
+  private async persistCurrentLayoutControls(): Promise<void> {
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (currentLayout === null) {
+      return;
+    }
+
+    const updatedLayout = currentLayout.clone();
+    updatedLayout.controls = this.layoutControls.map((control: LayoutControlItem) => control.clone());
+    updatedLayout.updatedAt = Date.now();
+    await this.persistLayout(updatedLayout, this.selectedControlId);
+  }
+
+  private findLocalControl(controlId: string): LayoutControlItem | null {
+    for (const control of this.layoutControls) {
+      if (control.id === controlId) {
+        return control.clone();
+      }
+    }
+    return null;
+  }
+
+  private updateLocalControl(nextControl: LayoutControlItem, normalizeGeometry: boolean = true): void {
+    const normalizedControl = normalizeGeometry ? this.normalizeControlGeometry(nextControl) : nextControl.clone();
+    this.layoutControls = this.layoutControls.map((control: LayoutControlItem) => {
+      if (control.id === normalizedControl.id) {
+        return normalizedControl.clone();
+      }
+      return control.clone();
+    });
+    this.updateControlEditorMessage();
+  }
+
+  private readGestureScale(event: Object): number {
+    const scale = Reflect.get(event, 'scale') as number | undefined;
+    return typeof scale === 'number' && Number.isFinite(scale) ? scale : 1;
+  }
+
+  private startControlPinch(controlId: string): void {
+    const control = this.findLocalControl(controlId);
+    if (control === null) {
+      return;
+    }
+
+    this.selectControl(controlId);
+    this.draggingControlId = '';
+    this.resizingSwipeControlId = '';
+    this.pinchingControlId = controlId;
+    this.pinchStartControlWidth = control.width;
+    this.pinchStartControlHeight = control.height;
+    this.pinchStartControlX = control.x;
+    this.pinchStartControlY = control.y;
+  }
+
+  private startSelectedControlPinch(): void {
+    if (this.selectedControlId.length === 0 || this.resizingSwipeControlId.length > 0 || this.draggingMenuButton) {
+      return;
+    }
+    this.startControlPinch(this.selectedControlId);
+  }
+
+  private updateControlPinch(controlId: string, event: Object): void {
+    if (this.pinchingControlId !== controlId) {
+      return;
+    }
+
+    const control = this.findLocalControl(controlId);
+    if (control === null) {
+      return;
+    }
+
+    const scale = clampEditorValue(this.readGestureScale(event), CONTROL_PINCH_MIN_SCALE, CONTROL_PINCH_MAX_SCALE);
+    let nextControl = control.clone();
+    nextControl.width = Math.round(this.pinchStartControlWidth * scale);
+    nextControl.height = Math.round(this.pinchStartControlHeight * scale);
+    nextControl.x = Math.round(this.pinchStartControlX + (this.pinchStartControlWidth - nextControl.width) / 2);
+    nextControl.y = Math.round(this.pinchStartControlY + (this.pinchStartControlHeight - nextControl.height) / 2);
+    nextControl = this.normalizeControlGeometry(nextControl);
+    this.updateLocalControl(nextControl, false);
+  }
+
+  private finishControlPinch(controlId: string): void {
+    if (this.pinchingControlId !== controlId) {
+      return;
+    }
+
+    this.pinchingControlId = '';
+    this.persistCurrentLayoutControls();
+  }
+
+  private updateSelectedControlPinch(event: Object): void {
+    if (this.pinchingControlId.length === 0) {
+      return;
+    }
+    this.updateControlPinch(this.pinchingControlId, event);
+  }
+
+  private finishSelectedControlPinch(): void {
+    if (this.pinchingControlId.length === 0) {
+      return;
+    }
+    this.finishControlPinch(this.pinchingControlId);
+  }
+
+  private getControlCenterX(control: LayoutControlItem): number {
+    return control.x + control.width / 2;
+  }
+
+  private getControlCenterY(control: LayoutControlItem): number {
+    return control.y + control.height / 2;
+  }
+
+  private startSwipeHandleDrag(controlId: string, handle: string): void {
+    const control = this.findLocalControl(controlId);
+    if (control === null) {
+      return;
+    }
+
+    this.selectControl(controlId);
+    this.draggingControlId = '';
+    this.pinchingControlId = '';
+    this.resizingSwipeControlId = controlId;
+    this.resizingSwipeHandle = handle;
+    this.swipeResizeThickness = control.height;
+    const positions = this.getSwipeHandlePositions(control);
+    if (handle === 'start') {
+      this.swipeResizeAnchorX = positions.end.x;
+      this.swipeResizeAnchorY = positions.end.y;
+      return;
+    }
+
+    this.swipeResizeAnchorX = positions.start.x;
+    this.swipeResizeAnchorY = positions.start.y;
+  }
+
+  private updateSwipeHandleDrag(controlId: string, event: Object): void {
+    if (this.resizingSwipeControlId !== controlId) {
+      return;
+    }
+
+    const control = this.findLocalControl(controlId);
+    if (control === null) {
+      return;
+    }
+
+    const movingX = this.toCanvasUnitX(this.readTouchWindowX(event));
+    const movingY = this.toCanvasUnitY(this.readTouchWindowY(event));
+    const deltaX = movingX - this.swipeResizeAnchorX;
+    const deltaY = movingY - this.swipeResizeAnchorY;
+    const rawDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    if (rawDistance < 1) {
+      return;
+    }
+
+    const nextHandleDistance = clampEditorValue(Math.round(rawDistance), CONTROL_SWIPE_MIN_LENGTH - CONTROL_SWIPE_HANDLE_SIZE,
+      CONTROL_SWIPE_MAX_LENGTH - CONTROL_SWIPE_HANDLE_SIZE);
+    const moveRatio = nextHandleDistance / rawDistance;
+    const movingHandleX = this.swipeResizeAnchorX + deltaX * moveRatio;
+    const movingHandleY = this.swipeResizeAnchorY + deltaY * moveRatio;
+    const nextPositions = this.resizingSwipeHandle === 'start'
+      ? new SwipeHandlePositions(new EditorPoint(movingHandleX, movingHandleY), new EditorPoint(this.swipeResizeAnchorX, this.swipeResizeAnchorY))
+      : new SwipeHandlePositions(new EditorPoint(this.swipeResizeAnchorX, this.swipeResizeAnchorY), new EditorPoint(movingHandleX, movingHandleY));
+    const fixedHandle = this.resizingSwipeHandle === 'start' ? 'end' : 'start';
+    let nextControl = control.clone();
+    nextControl.height = clampEditorValue(this.swipeResizeThickness, CONTROL_SWIPE_MIN_THICKNESS, CONTROL_SWIPE_MAX_THICKNESS);
+    nextControl = this.applySwipeHandlePositions(nextControl, nextPositions, fixedHandle);
+    this.updateLocalControl(nextControl, false);
+  }
+
+  private finishSwipeHandleDrag(controlId: string): void {
+    if (this.resizingSwipeControlId !== controlId) {
+      return;
+    }
+
+    this.resizingSwipeControlId = '';
+    this.resizingSwipeHandle = '';
+    this.persistCurrentLayoutControls();
+  }
+
+  private updateCanvasSize(area: Object): void {
+    const width = this.readAreaNumber(area, 'width');
+    const height = this.readAreaNumber(area, 'height');
+    if (width > 0) {
+      this.canvasWidthPx = width;
+    }
+    if (height > 0) {
+      this.canvasHeightPx = height;
+    }
+  }
+
+  private updateViewportSize(area: Object): void {
+    const width = this.readAreaNumber(area, 'width');
+    const height = this.readAreaNumber(area, 'height');
+    if (width > 0) {
+      this.viewportWidthPx = width;
+    }
+    if (height > 0) {
+      this.viewportHeightPx = height;
+    }
+
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+
+    if (!this.menuButtonInitialized) {
+      this.menuButtonX = this.getClampedMenuButtonX(width - MENU_BUTTON_WIDTH - MENU_EDGE_MARGIN);
+      this.menuButtonY = this.getClampedMenuButtonY(MENU_EDGE_MARGIN);
+      this.menuButtonInitialized = true;
+      return;
+    }
+
+    this.menuButtonX = this.getClampedMenuButtonX(this.menuButtonX);
+    this.menuButtonY = this.getClampedMenuButtonY(this.menuButtonY);
+  }
+
+  private getClampedMenuButtonX(value: number): number {
+    const maxValue = Math.max(MENU_EDGE_MARGIN, this.viewportWidthPx - MENU_BUTTON_WIDTH - MENU_EDGE_MARGIN);
+    return clampEditorValue(Math.round(value), MENU_EDGE_MARGIN, maxValue);
+  }
+
+  private getClampedMenuButtonY(value: number): number {
+    const maxValue = Math.max(MENU_EDGE_MARGIN, this.viewportHeightPx - MENU_BUTTON_HEIGHT - MENU_EDGE_MARGIN);
+    return clampEditorValue(Math.round(value), MENU_EDGE_MARGIN, maxValue);
+  }
+
+  private handleMenuButtonTouch(event: Object): void {
+    const action = this.readTouchAction(event);
+    if (action === TOUCH_ACTION_DOWN) {
+      this.draggingMenuButton = true;
+      this.menuButtonMoved = false;
+      this.menuDragStartWindowX = this.readTouchWindowX(event);
+      this.menuDragStartWindowY = this.readTouchWindowY(event);
+      this.menuButtonDragStartX = this.menuButtonX;
+      this.menuButtonDragStartY = this.menuButtonY;
+      return;
+    }
+
+    if (action === TOUCH_ACTION_MOVE && this.draggingMenuButton) {
+      const deltaX = this.readTouchWindowX(event) - this.menuDragStartWindowX;
+      const deltaY = this.readTouchWindowY(event) - this.menuDragStartWindowY;
+      if (Math.abs(deltaX) >= MENU_DRAG_THRESHOLD_PX || Math.abs(deltaY) >= MENU_DRAG_THRESHOLD_PX) {
+        this.menuButtonMoved = true;
+      }
+      this.menuButtonX = this.getClampedMenuButtonX(this.menuButtonDragStartX + deltaX);
+      this.menuButtonY = this.getClampedMenuButtonY(this.menuButtonDragStartY + deltaY);
+      return;
+    }
+
+    if ((action === TOUCH_ACTION_UP || action === TOUCH_ACTION_CANCEL) && this.draggingMenuButton) {
+      const shouldToggleMenu = !this.menuButtonMoved;
+      this.draggingMenuButton = false;
+      this.menuButtonMoved = false;
+      if (shouldToggleMenu) {
+        this.menuExpanded = !this.menuExpanded;
+      }
+    }
+  }
+
+  private getMenuPanelHeight(): number {
+    if (this.viewportHeightPx <= 0) {
+      return MENU_PANEL_HEIGHT;
+    }
+    const nextHeight = Math.round(this.viewportHeightPx * 0.72);
+    return clampEditorValue(nextHeight, 280, MENU_PANEL_HEIGHT);
+  }
+
+  private getMenuPanelX(): number {
+    const rawX = this.menuButtonX + MENU_BUTTON_WIDTH - MENU_PANEL_WIDTH;
+    const maxValue = Math.max(MENU_EDGE_MARGIN, this.viewportWidthPx - MENU_PANEL_WIDTH - MENU_EDGE_MARGIN);
+    return clampEditorValue(rawX, MENU_EDGE_MARGIN, maxValue);
+  }
+
+  private getMenuPanelY(): number {
+    const desiredY = this.menuButtonY + MENU_BUTTON_HEIGHT + MENU_PANEL_OFFSET;
+    const maxValue = Math.max(MENU_EDGE_MARGIN, this.viewportHeightPx - this.getMenuPanelHeight() - MENU_EDGE_MARGIN);
+    return clampEditorValue(desiredY, MENU_EDGE_MARGIN, maxValue);
+  }
+
+  private readAreaNumber(area: Object, key: string): number {
+    const value = Reflect.get(area, key) as string | number | undefined;
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  }
+
+  private readTouchAction(event: Object): number {
+    const actionValue = Reflect.get(event, 'type') as number | undefined;
+    if (typeof actionValue === 'number') {
+      return actionValue;
+    }
+
+    const fallbackActionValue = Reflect.get(event, 'action') as number | undefined;
+    if (typeof fallbackActionValue !== 'number') {
+      return TOUCH_ACTION_CANCEL;
+    }
+
+    switch (fallbackActionValue) {
+      case 0:
+        return TOUCH_ACTION_CANCEL;
+      case 1:
+        return TOUCH_ACTION_DOWN;
+      case 2:
+        return TOUCH_ACTION_MOVE;
+      case 3:
+        return TOUCH_ACTION_UP;
+      default:
+        return TOUCH_ACTION_CANCEL;
+    }
+  }
+
+  private readPrimaryTouch(event: Object): Object | null {
+    const directTouch = Reflect.get(event, 'touch') as Object | undefined;
+    if (directTouch !== undefined) {
+      return directTouch;
+    }
+
+    const touches = Reflect.get(event, 'touches') as Array<Object> | undefined;
+    if (Array.isArray(touches) && touches.length > 0) {
+      return touches[0];
+    }
+
+    const changedTouches = Reflect.get(event, 'changedTouches') as Array<Object> | undefined;
+    if (Array.isArray(changedTouches) && changedTouches.length > 0) {
+      return changedTouches[0];
+    }
+
+    return null;
+  }
+
+  private readTouchWindowX(event: Object): number {
+    const touchObject = this.readPrimaryTouch(event);
+    if (touchObject !== null) {
+      const windowX = Reflect.get(touchObject, 'windowX') as number | undefined;
+      if (typeof windowX === 'number') {
+        return windowX;
+      }
+
+      const screenX = Reflect.get(touchObject, 'screenX') as number | undefined;
+      if (typeof screenX === 'number') {
+        return screenX;
+      }
+    }
+
+    const windowX = Reflect.get(event, 'windowX') as number | undefined;
+    if (typeof windowX === 'number') {
+      return windowX;
+    }
+
+    const screenX = Reflect.get(event, 'screenX') as number | undefined;
+    return typeof screenX === 'number' ? screenX : 0;
+  }
+
+  private readTouchWindowY(event: Object): number {
+    const touchObject = this.readPrimaryTouch(event);
+    if (touchObject !== null) {
+      const windowY = Reflect.get(touchObject, 'windowY') as number | undefined;
+      if (typeof windowY === 'number') {
+        return windowY;
+      }
+
+      const screenY = Reflect.get(touchObject, 'screenY') as number | undefined;
+      if (typeof screenY === 'number') {
+        return screenY;
+      }
+    }
+
+    const windowY = Reflect.get(event, 'windowY') as number | undefined;
+    if (typeof windowY === 'number') {
+      return windowY;
+    }
+
+    const screenY = Reflect.get(event, 'screenY') as number | undefined;
+    return typeof screenY === 'number' ? screenY : 0;
+  }
+
+  private toCanvasUnitX(windowX: number): number {
+    return clampEditorValue(Math.round(windowX / Math.max(this.canvasWidthPx, 1) * CONTROL_CANVAS_UNITS), 0, CONTROL_CANVAS_UNITS);
+  }
+
+  private toCanvasUnitY(windowY: number): number {
+    return clampEditorValue(Math.round(windowY / Math.max(this.canvasHeightPx, 1) * CONTROL_CANVAS_UNITS), 0, CONTROL_CANVAS_UNITS);
+  }
+
+  private async replaceSelectedControl(currentLayout: InputLayout, nextControl: LayoutControlItem): Promise<void> {
+    const updatedLayout = currentLayout.clone();
+    updatedLayout.controls = currentLayout.controls.map((control: LayoutControlItem) => {
+      if (control.id === nextControl.id) {
+        return nextControl.clone();
+      }
+      return control.clone();
+    });
+    updatedLayout.updatedAt = Date.now();
+    await this.persistLayout(updatedLayout, nextControl.id);
+  }
+
+  private async persistLayout(layout: InputLayout, nextSelectedControlId: string): Promise<void> {
+    try {
+      await layoutRepository.saveLayout(layout);
+      this.applyLayout(layout);
+      this.selectedControlId = nextSelectedControlId;
+      this.syncSelectedControl();
+      this.refreshLayoutSummary();
+      this.updateControlEditorMessage();
+    } catch (error) {
+      const errorObject = error as Object;
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'persist layout failed: %{public}s', JSON.stringify(errorObject));
+      await this.showActionError('保存失败', '布局更新没有保存成功，请稍后重试。');
+    }
+  }
+
+  private async importBackgroundImage(): Promise<void> {
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (currentLayout === null) {
+      await this.showActionError('导入失败', '当前没有可用布局，暂时无法绑定背景图。');
+      return;
+    }
+
+    try {
+      const documentPicker = new picker.DocumentViewPicker(this.hostContext);
+      const selectedUris = await documentPicker.select({
+        fileSuffixFilters: ['图片|.png,.jpg,.jpeg,.webp,.bmp'],
+        maxSelectNumber: 1,
+      });
+      if (selectedUris.length === 0) {
+        return;
+      }
+
+      const backgroundUri = await this.copyBackgroundIntoSandbox(currentLayout.id, selectedUris[0]);
+      const updatedLayout = currentLayout.clone();
+      updatedLayout.backgroundImageUri = backgroundUri;
+      updatedLayout.updatedAt = Date.now();
+      await layoutRepository.saveLayout(updatedLayout);
+      this.applyLayout(updatedLayout);
+      this.refreshLayoutSummary();
+    } catch (error) {
+      const errorObject = error as Object;
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'import background failed: %{public}s', JSON.stringify(errorObject));
+      await this.showActionError('导入失败', '无法导入背景图，请确认已选择图片文件。');
+    }
+  }
+
+  private async clearBackgroundImage(): Promise<void> {
+    const currentLayout = layoutRepository.getCurrentLayout();
+    if (currentLayout === null || currentLayout.backgroundImageUri.length === 0) {
+      return;
+    }
+
+    try {
+      const updatedLayout = currentLayout.clone();
+      updatedLayout.backgroundImageUri = '';
+      updatedLayout.updatedAt = Date.now();
+      await layoutRepository.saveLayout(updatedLayout);
+      this.applyLayout(updatedLayout);
+      this.refreshLayoutSummary();
+    } catch (error) {
+      const errorObject = error as Object;
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'clear background failed: %{public}s', JSON.stringify(errorObject));
+      await this.showActionError('清除失败', '当前背景图绑定无法清除，请稍后重试。');
+    }
+  }
+
+  private async copyBackgroundIntoSandbox(layoutId: string, sourceUri: string): Promise<string> {
+    const directoryPath = `${this.hostContext.filesDir}/${BACKGROUND_DIRECTORY_NAME}`;
+    try {
+      await fs.mkdir(directoryPath, true);
+    } catch (_) {
+    }
+
+    try {
+      const extension = this.getUriExtension(sourceUri);
+      const destinationPath = `${directoryPath}/${layoutId}${extension}`;
+      const destinationUri = fileUri.getUriFromPath(destinationPath);
+      await fs.copy(sourceUri, destinationUri);
+      return destinationUri;
+    } catch (error) {
+      const errorObject = error as Object;
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'copy background into sandbox failed: %{public}s', JSON.stringify(errorObject));
+      throw new Error('Failed to copy background image into sandbox.');
+    }
+  }
+
+  private getUriExtension(uri: string): string {
+    const normalizedUri = uri.split('?')[0];
+    const lastSlashIndex = normalizedUri.lastIndexOf('/');
+    const fileName = lastSlashIndex >= 0 ? normalizedUri.substring(lastSlashIndex + 1) : normalizedUri;
+    const lastDotIndex = fileName.lastIndexOf('.');
+    if (lastDotIndex < 0) {
+      return '.png';
+    }
+
+    const extension = fileName.substring(lastDotIndex).toLowerCase();
+    return extension.length > 0 ? extension : '.png';
+  }
+
+  private async showActionError(title: string, message: string): Promise<void> {
+    try {
+      await this.getUIContext().getPromptAction().showDialog({
+        title,
+        message,
+        buttons: [
+          {
+            text: '知道了',
+            color: PRIMARY_COLOR,
+          },
+        ],
+      });
+    } catch (_) {
+    }
+  }
+
+  private handleNativeInputEvents(eventsJson: string): void {
+    const events = this.parseJsonArray(eventsJson);
+    if (events.length === 0) {
+      return;
+    }
+
+    this.nativeInputEventCount += events.length;
+    const lastEventKind = this.getStringField(events[events.length - 1], 'kind');
+    const eventLabel = this.toNativeInputEventLabel(lastEventKind);
+    this.nativeInputLastEvent = `最近收到 ${events.length} 条${eventLabel}，累计 ${this.nativeInputEventCount} 条。`;
+    this.refreshNativeInputState();
+    void this.captureBindingFromNativeEvents(events);
+  }
+
+  private async captureBindingFromNativeEvents(events: Array<Object>): Promise<void> {
+    if (!this.isBindingCaptureListening()) {
+      return;
+    }
+
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return;
+    }
+
+    for (const event of events) {
+      const binding = this.tryBuildBindingFromNativeEvent(selectedControl, event);
+      if (binding !== null) {
+        await this.bindSelectedControl(binding.code, binding.label, binding.sourceLabel);
+        return;
+      }
+    }
+  }
+
+  private tryBuildBindingFromNativeEvent(control: LayoutControlItem, event: Object): CapturedBinding | null {
+    const eventKind = this.getStringField(event, 'kind');
+    if (eventKind === 'gamepad-button') {
+      return this.tryBuildButtonBinding(control, event);
+    }
+    if (eventKind === 'gamepad-axis') {
+      return this.tryBuildAxisBinding(control, event);
+    }
+    return null;
+  }
+
+  private tryBuildButtonBinding(control: LayoutControlItem, event: Object): CapturedBinding | null {
+    if (control.inputKind !== CONTROL_TYPE_BUTTON) {
+      return null;
+    }
+
+    const action = this.getStringField(event, 'action');
+    if (action !== 'down') {
+      return null;
+    }
+
+    const codeName = this.getStringField(event, 'codeName');
+    const bindingCode = this.mapGamepadButtonCode(codeName);
+    return new CapturedBinding(bindingCode, this.getBindingLabel(bindingCode), '手柄按钮');
+  }
+
+  private tryBuildAxisBinding(control: LayoutControlItem, event: Object): CapturedBinding | null {
+    const source = this.getStringField(event, 'source');
+    if (control.inputKind === CONTROL_TYPE_STICK_MOVE || control.inputKind === CONTROL_TYPE_STICK_LOOK) {
+      if (source === 'left-thumbstick') {
+        return new CapturedBinding('axis-left-stick', '左摇杆', '摇杆');
+      }
+      if (source === 'right-thumbstick') {
+        return new CapturedBinding('axis-right-stick', '右摇杆', '摇杆');
+      }
+      return null;
+    }
+
+    if (control.inputKind !== CONTROL_TYPE_SWIPE) {
+      return null;
+    }
+
+    if (source === 'left-trigger') {
+      const value = Math.abs(this.getNumberField(event, 'brake'));
+      if (value < BINDING_AXIS_THRESHOLD) {
+        return null;
+      }
+      return new CapturedBinding('axis-left-trigger', '左扳机', '线性扳机');
+    }
+    if (source === 'right-trigger') {
+      const value = Math.abs(this.getNumberField(event, 'gas'));
+      if (value < BINDING_AXIS_THRESHOLD) {
+        return null;
+      }
+      return new CapturedBinding('axis-right-trigger', '右扳机', '线性扳机');
+    }
+    if (source === 'left-thumbstick') {
+      return this.buildStickAxisBinding('left-stick', this.getNumberField(event, 'x'), this.getNumberField(event, 'y'));
+    }
+    if (source === 'right-thumbstick') {
+      let horizontal = this.getNumberField(event, 'z');
+      let vertical = this.getNumberField(event, 'rz');
+      if (Math.abs(horizontal) < BINDING_AXIS_THRESHOLD && Math.abs(vertical) < BINDING_AXIS_THRESHOLD) {
+        horizontal = this.getNumberField(event, 'x');
+        vertical = this.getNumberField(event, 'y');
+      }
+      return this.buildStickAxisBinding('right-stick', horizontal, vertical);
+    }
+    return null;
+  }
+
+  private buildStickAxisBinding(stickName: string, horizontalValue: number, verticalValue: number): CapturedBinding | null {
+    if (Math.abs(horizontalValue) < BINDING_AXIS_THRESHOLD && Math.abs(verticalValue) < BINDING_AXIS_THRESHOLD) {
+      return null;
+    }
+
+    if (Math.abs(horizontalValue) >= Math.abs(verticalValue)) {
+      if (stickName === 'left-stick') {
+        return new CapturedBinding('axis-left-stick-x', '左摇杆 X 轴', '摇杆轴');
+      }
+      return new CapturedBinding('axis-right-stick-x', '右摇杆 X 轴', '摇杆轴');
+    }
+
+    if (stickName === 'left-stick') {
+      return new CapturedBinding('axis-left-stick-y', '左摇杆 Y 轴', '摇杆轴');
+    }
+    return new CapturedBinding('axis-right-stick-y', '右摇杆 Y 轴', '摇杆轴');
+  }
+
+  private mapGamepadButtonCode(codeName: string): string {
+    const normalizedCodeName = codeName.trim().toLowerCase().replace(/[_\s]+/g, '-');
+    if (normalizedCodeName.includes('button-a') || normalizedCodeName === 'a') {
+      return 'button-a';
+    }
+    if (normalizedCodeName.includes('button-b') || normalizedCodeName === 'b') {
+      return 'button-b';
+    }
+    if (normalizedCodeName.includes('button-x') || normalizedCodeName === 'x') {
+      return 'button-x';
+    }
+    if (normalizedCodeName.includes('button-y') || normalizedCodeName === 'y') {
+      return 'button-y';
+    }
+    if (normalizedCodeName.includes('left-shoulder') || normalizedCodeName.includes('leftshoulder') || normalizedCodeName === 'l1') {
+      return 'button-l1';
+    }
+    if (normalizedCodeName.includes('right-shoulder') || normalizedCodeName.includes('rightshoulder') || normalizedCodeName === 'r1') {
+      return 'button-r1';
+    }
+    if (normalizedCodeName.includes('left-trigger') || normalizedCodeName.includes('lefttrigger') || normalizedCodeName === 'l2') {
+      return 'button-l2';
+    }
+    if (normalizedCodeName.includes('right-trigger') || normalizedCodeName.includes('righttrigger') || normalizedCodeName === 'r2') {
+      return 'button-r2';
+    }
+    if (normalizedCodeName.includes('menu') || normalizedCodeName.includes('start')) {
+      return 'button-start';
+    }
+    if (normalizedCodeName.includes('select') || normalizedCodeName.includes('back')) {
+      return 'button-select';
+    }
+    if (normalizedCodeName.includes('dpad-left')) {
+      return 'button-dpad-left';
+    }
+    if (normalizedCodeName.includes('dpad-right')) {
+      return 'button-dpad-right';
+    }
+    if (normalizedCodeName.includes('dpad-up')) {
+      return 'button-dpad-up';
+    }
+    if (normalizedCodeName.includes('dpad-down')) {
+      return 'button-dpad-down';
+    }
+    return `button-${normalizedCodeName}`;
+  }
+
+  private readKeyEventType(event: Object): number {
+    const type = Reflect.get(event, 'type') as number | undefined;
+    return typeof type === 'number' ? type : -1;
+  }
+
+  private readKeyEventCode(event: Object): number {
+    const keyCode = Reflect.get(event, 'keyCode') as number | undefined;
+    return typeof keyCode === 'number' ? keyCode : -1;
+  }
+
+  private readKeyEventText(event: Object): string {
+    const keyText = Reflect.get(event, 'keyText') as string | undefined;
+    return typeof keyText === 'string' ? keyText : '';
+  }
+
+  private handleKeyBindingEvent(event: Object): boolean {
+    if (!this.isBindingCaptureListening()) {
+      return false;
+    }
+    if (this.readKeyEventType(event) !== KEY_EVENT_DOWN) {
+      return false;
+    }
+
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return false;
+    }
+    if (selectedControl.inputKind !== CONTROL_TYPE_BUTTON && selectedControl.inputKind !== CONTROL_TYPE_KEYBOARD_MOVE &&
+      selectedControl.inputKind !== CONTROL_TYPE_KEYBOARD_LOOK) {
+      return false;
+    }
+
+    const keyCode = this.readKeyEventCode(event);
+    if (keyCode < 0) {
+      return false;
+    }
+
+    const keyText = this.readKeyEventText(event).trim();
+    if (this.isDirectionalKeyboardControlType(selectedControl.inputKind)) {
+      if (this.hasPendingDirectionalKeyCode(keyCode)) {
+        return true;
+      }
+
+      this.pendingDirectionalKeyCodes = [...this.pendingDirectionalKeyCodes, keyCode];
+      this.pendingDirectionalKeyLabels = [...this.pendingDirectionalKeyLabels, this.getDirectionalBindingToken(keyText, keyCode)];
+      if (this.pendingDirectionalKeyCodes.length < DIRECTIONAL_BINDING_PART_COUNT) {
+        this.updateDirectionalBindingHint(selectedControl);
+        this.updateControlEditorMessage();
+        return true;
+      }
+
+      const capturedKeyCodes = [...this.pendingDirectionalKeyCodes];
+      const capturedKeyLabels = [...this.pendingDirectionalKeyLabels];
+      void this.bindSelectedDirectionalKeys(capturedKeyCodes, capturedKeyLabels);
+      return true;
+    }
+
+    if (selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
+      const mappedButtonCode = this.tryMapGamepadButtonBindingFromKeyName(keyText);
+      if (mappedButtonCode.length > 0) {
+        void this.bindSelectedControl(mappedButtonCode, this.getBindingLabel(mappedButtonCode), '按键');
+        return true;
+      }
+    }
+
+    const bindingLabel = keyText.length > 0 ? this.formatBindingDisplayName(keyText) : `按键 ${keyCode}`;
+    void this.bindSelectedControl(`key-${keyCode}`, bindingLabel, '键盘');
+    return true;
+  }
+
+  private readMouseAction(event: Object): number {
+    const action = Reflect.get(event, 'action') as number | undefined;
+    return typeof action === 'number' ? action : -1;
+  }
+
+  private readMouseButton(event: Object): number {
+    const button = Reflect.get(event, 'button') as number | undefined;
+    return typeof button === 'number' ? button : -1;
+  }
+
+  private readMouseRawDeltaX(event: Object): number {
+    const delta = Reflect.get(event, 'rawDeltaX') as number | undefined;
+    return typeof delta === 'number' ? delta : 0;
+  }
+
+  private readMouseRawDeltaY(event: Object): number {
+    const delta = Reflect.get(event, 'rawDeltaY') as number | undefined;
+    return typeof delta === 'number' ? delta : 0;
+  }
+
+  private getMouseButtonLabel(button: number): string {
+    switch (button) {
+      case 0:
+        return '左键';
+      case 1:
+        return '中键';
+      case 2:
+        return '右键';
+      case 3:
+        return '侧键';
+      case 4:
+        return '扩展键';
+      default:
+        return `按钮 ${button}`;
+    }
+  }
+
+  private handleMouseBindingEvent(event: Object): void {
+    if (!this.isBindingCaptureListening()) {
+      return;
+    }
+
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return;
+    }
+
+    const action = this.readMouseAction(event);
+    if (action === MOUSE_ACTION_BUTTON_DOWN && selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
+      const button = this.readMouseButton(event);
+      if (button >= 0) {
+        void this.bindSelectedControl(`mouse-button-${button}`, `鼠标${this.getMouseButtonLabel(button)}`, '鼠标按钮');
+      }
+      return;
+    }
+  }
+
+  private parseJsonArray(jsonText: string): Array<Object> {
+    try {
+      const value = JSON.parse(jsonText) as Array<Object>;
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  private getStringField(target: Object, key: string): string {
+    const value = Reflect.get(target, key) as string | undefined;
+    return typeof value === 'string' ? value : '';
+  }
+
+  private getNumberField(target: Object, key: string): number {
+    const value = Reflect.get(target, key) as number | undefined;
+    return typeof value === 'number' ? value : 0;
+  }
+
+  private toNativeInputEventLabel(kind: string): string {
+    switch (kind) {
+      case 'gamepad-button':
+        return '按钮输入';
+      case 'gamepad-axis':
+        return '摇杆/轴输入';
+      case 'device-status':
+        return '设备状态变化';
+      default:
+        return '输入事件';
+    }
+  }
+
+  private refreshConnectionSummary(state: HidDebugState, devices: Array<RemoteDeviceItem>): void {
+    if (!state.connected || state.lastConnectedDeviceId.length === 0) {
+      this.connectedDeviceName = '未连接设备';
+      this.connectedDeviceId = '';
+      return;
+    }
+
+    this.connectedDeviceId = state.lastConnectedDeviceId;
+    this.connectedDeviceName = this.findDeviceName(state.lastConnectedDeviceId, devices);
+  }
+
+  private findDeviceName(deviceId: string, devices: Array<RemoteDeviceItem>): string {
+    for (const device of devices) {
+      if (device.deviceId === deviceId) {
+        return device.name || '未命名设备';
+      }
+    }
+    return '已连接设备';
+  }
+
+  private getConnectionDescription(): string {
+    return '当前页面会把背景图尽量铺满画布，操作集中在右上角可拖动的浮层菜单。';
+  }
+
+  private getNativeInputDescription(): string {
+    if (this.nativeInputState.monitoringStarted) {
+      return '原生输入桥已经就绪，选中控件后会直接监听这里的手柄输入。';
+    }
+
+    if (this.nativeInputState.lastErrorCode !== 0) {
+      return `原生输入监控尚未启动，最近错误码为 ${this.nativeInputState.lastErrorCode}。`;
+    }
+
+    return '原生输入监控会跟随连接状态启动，手柄绑定依赖这里的实时事件。';
+  }
+
+  private getNativeInputMetricsText(): string {
+    return `已识别手柄 ${this.nativeInputDeviceCount} 个，队列待取 ${this.nativeInputState.queuedEventCount} 条，累计事件 ${this.nativeInputEventCount} 条。`;
+  }
+
+  private getLayoutRepositoryDescription(): string {
+    return '先把泛型控件放到画布中央，再选中它并直接按手柄、键盘或鼠标完成绑定。';
+  }
+
+  private getLayoutRepositoryMetricsText(): string {
+    return `当前布局：${this.currentLayoutName}，控件 ${this.currentLayoutControlCount}，已保存布局 ${this.savedLayoutCount} 个。`;
+  }
+
+  private getBackgroundDescription(): string {
+    if (this.currentLayoutBackgroundImageUri.length > 0) {
+      return '背景图已导入，画布会尽量按全屏展示。';
+    }
+
+    return '当前布局还未绑定背景图，请先导入截图再摆放控件。';
+  }
+
+  private getSelectedControlTypeLabel(): string {
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return '未选中';
+    }
+    return this.getControlTypeLabel(selectedControl.inputKind);
+  }
+
+  private getSelectedControlBindingText(): string {
+    const selectedControl = this.getSelectedControl();
+    if (selectedControl === null) {
+      return '未绑定';
+    }
+    return this.getControlBindingLabel(selectedControl);
+  }
+
+  private toPercent(units: number): string {
+    return `${clampEditorValue(units, 0, CONTROL_CANVAS_UNITS) / 10}%`;
+  }
+
+  private toCanvasXValue(units: number): number {
+    return clampEditorValue(units, 0, CONTROL_CANVAS_UNITS) / CONTROL_CANVAS_UNITS * Math.max(this.canvasWidthPx, 1);
+  }
+
+  private toCanvasYValue(units: number): number {
+    return clampEditorValue(units, 0, CONTROL_CANVAS_UNITS) / CONTROL_CANVAS_UNITS * Math.max(this.canvasHeightPx, 1);
+  }
+
+  private toCanvasWidthValue(units: number): number {
+    return clampEditorValue(units, 0, CONTROL_CANVAS_UNITS) / CONTROL_CANVAS_UNITS * Math.max(this.canvasWidthPx, 1);
+  }
+
+  private toCanvasHeightValue(units: number): number {
+    return clampEditorValue(units, 0, CONTROL_CANVAS_UNITS) / CONTROL_CANVAS_UNITS * Math.max(this.canvasHeightPx, 1);
+  }
+
+  private getControlBodyWidthValue(control: LayoutControlItem): number {
+    if (this.isRoundControlType(control.inputKind)) {
+      return this.toCanvasWidthValue(control.width);
+    }
+    return this.toCanvasWidthValue(control.width);
+  }
+
+  private getControlBodyHeightValue(control: LayoutControlItem): number {
+    if (this.isRoundControlType(control.inputKind)) {
+      return this.toCanvasWidthValue(control.width);
+    }
+    return this.toCanvasHeightValue(control.height);
+  }
+
+  private getBindingCaptionWidthUnits(control: LayoutControlItem): number {
+    if (this.isRoundControlType(control.inputKind)) {
+      return Math.max(control.width, 132);
+    }
+    if (control.inputKind === CONTROL_TYPE_SWIPE) {
+      return Math.max(control.width, 220);
+    }
+    return control.width;
+  }
+
+  private getBindingCaptionWidthValue(control: LayoutControlItem): number {
+    return this.toCanvasWidthValue(this.getBindingCaptionWidthUnits(control));
+  }
+
+  private getControlOverlayWidthValue(control: LayoutControlItem): number {
+    return Math.max(this.getControlBodyWidthValue(control), this.getBindingCaptionWidthValue(control));
+  }
+
+  private getControlOverlayXValue(control: LayoutControlItem): number {
+    const bodyWidth = this.getControlBodyWidthValue(control);
+    const overlayWidth = this.getControlOverlayWidthValue(control);
+    return this.toCanvasXValue(control.x) - Math.max(0, (overlayWidth - bodyWidth) / 2);
+  }
+
+  private getControlRenderKey(control: LayoutControlItem): string {
+    const selectedFlag = this.selectedControlId === control.id ? 'selected' : 'idle';
+    return `${control.id}:${control.x}:${control.y}:${control.width}:${control.height}:${control.inputCode}:${control.payloadJson}:${selectedFlag}`;
+  }
+
+  private getControlBodyBorderRadius(control: LayoutControlItem): number {
+    if (this.isRoundControlType(control.inputKind) || control.inputKind === CONTROL_TYPE_SWIPE) {
+      return 999;
+    }
+    if (this.isLookControlType(control.inputKind)) {
+      return 20;
+    }
+    return 18;
+  }
+
+  private getControlSurfaceColor(control: LayoutControlItem): string {
+    if (this.selectedControlId === control.id) {
+      return 'rgba(20, 86, 240, 0.82)';
+    }
+    if (this.isRoundControlType(control.inputKind)) {
+      return 'rgba(15, 23, 42, 0.70)';
+    }
+    if (control.inputKind === CONTROL_TYPE_SWIPE) {
+      return 'rgba(8, 47, 73, 0.74)';
+    }
+    return 'rgba(16, 24, 40, 0.60)';
+  }
+
+  private getRoundGlyphSize(control: LayoutControlItem): number {
+    if (control.width <= 72) {
+      return 24;
+    }
+    if (control.width <= 96) {
+      return 30;
+    }
+    return 40;
+  }
+
+  private getMoveGlyphArrowSize(control: LayoutControlItem): number {
+    return this.getRoundGlyphSize(control) <= 24 ? 10 : 12;
+  }
+
+  private getMoveGlyphCenterSize(control: LayoutControlItem): number {
+    return Math.max(8, Math.round(this.getRoundGlyphSize(control) * 0.3));
+  }
+
+  private getMoveGlyphHalfGap(control: LayoutControlItem): number {
+    return Math.round((this.getRoundGlyphSize(control) - this.getMoveGlyphCenterSize(control)) / 2);
+  }
+
+  private getLookGlyphHeight(control: LayoutControlItem): number {
+    return Math.max(20, Math.round(this.getRoundGlyphSize(control) * 0.8));
+  }
+
+  private getLookCameraBodyWidth(control: LayoutControlItem): number {
+    return Math.max(18, Math.round(this.getRoundGlyphSize(control) * 0.7));
+  }
+
+  private getLookCameraBodyHeight(control: LayoutControlItem): number {
+    return Math.max(14, Math.round(this.getLookGlyphHeight(control) * 0.55));
+  }
+
+  private getLookLensSize(control: LayoutControlItem): number {
+    return Math.max(8, Math.round(this.getLookCameraBodyHeight(control) * 0.55));
+  }
+
+  private getLookTopBarWidth(control: LayoutControlItem): number {
+    return Math.max(8, Math.round(this.getLookCameraBodyWidth(control) * 0.45));
+  }
+
+  private getLookTopBarHeight(control: LayoutControlItem): number {
+    return Math.max(4, Math.round(this.getLookCameraBodyHeight(control) * 0.2));
+  }
+
+  private getControlNameFontSize(control: LayoutControlItem): number {
+    if (control.width <= 72) {
+      return 10;
+    }
+    if (control.width <= 96) {
+      return 11;
+    }
+    return 12;
+  }
+
+  private getBindingLabelFontSize(control: LayoutControlItem): number {
+    if (control.width <= 80) {
+      return 9;
+    }
+    return 10;
+  }
+
+  private getSwipeDirectionArrowFontSize(control: LayoutControlItem): number {
+    return control.width <= 140 ? 11 : 13;
+  }
+
+  private getSwipeDirectionOffsetValue(control: LayoutControlItem): number {
+    return this.getSwipeDirectionArrowFontSize(control) + SWIPE_DIRECTION_GAP;
+  }
+
+  @Builder
+  private buildSwipeDirectionIndicator(control: LayoutControlItem) {
+    Text('→')
+      .width(this.getControlBodyWidthValue(control) - CONTROL_SWIPE_HANDLE_SIZE)
+      .fontSize(this.getSwipeDirectionArrowFontSize(control))
+      .fontWeight(FontWeight.Bold)
+      .fontColor('rgba(253,230,138,0.92)')
+      .textAlign(TextAlign.Center)
+  }
+
+  @Builder
+  private buildBindingCaption(control: LayoutControlItem) {
+    Text(this.getControlBindingCaptionText(control))
+      .width(this.getBindingCaptionWidthValue(control))
+      .fontSize(this.getBindingLabelFontSize(control))
+      .fontColor('#EAECF0')
+      .textAlign(TextAlign.Center)
+      .lineHeight(this.getBindingLabelFontSize(control) + 4)
+  }
+
+  @Builder
+  private buildMoveGlyph(control: LayoutControlItem) {
+    Stack() {
+      Text('↑')
+        .fontSize(this.getMoveGlyphArrowSize(control))
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#F8FAFC')
+        .position({ x: this.getMoveGlyphHalfGap(control), y: 0 })
+
+      Text('↓')
+        .fontSize(this.getMoveGlyphArrowSize(control))
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#F8FAFC')
+        .position({ x: this.getMoveGlyphHalfGap(control), y: this.getRoundGlyphSize(control) - this.getMoveGlyphArrowSize(control) })
+
+      Text('←')
+        .fontSize(this.getMoveGlyphArrowSize(control))
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#F8FAFC')
+        .position({ x: 0, y: this.getMoveGlyphHalfGap(control) - 1 })
+
+      Text('→')
+        .fontSize(this.getMoveGlyphArrowSize(control))
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#F8FAFC')
+        .position({ x: this.getRoundGlyphSize(control) - this.getMoveGlyphArrowSize(control), y: this.getMoveGlyphHalfGap(control) - 1 })
+
+      Column()
+        .width(this.getMoveGlyphCenterSize(control))
+        .height(this.getMoveGlyphCenterSize(control))
+        .backgroundColor('rgba(255,255,255,0.18)')
+        .borderRadius(this.getMoveGlyphCenterSize(control))
+        .position({ x: this.getMoveGlyphHalfGap(control), y: this.getMoveGlyphHalfGap(control) })
+    }
+    .width(this.getRoundGlyphSize(control))
+    .height(this.getRoundGlyphSize(control))
+  }
+
+  @Builder
+  private buildLookGlyph(control: LayoutControlItem) {
+    Stack() {
+      Column()
+        .width(this.getLookTopBarWidth(control))
+        .height(this.getLookTopBarHeight(control))
+        .backgroundColor('rgba(255,255,255,0.82)')
+        .borderRadius(2)
+        .position({ x: Math.round((this.getRoundGlyphSize(control) - this.getLookTopBarWidth(control)) / 2), y: 2 })
+
+      Row() {
+        Column()
+          .width(this.getLookLensSize(control))
+          .height(this.getLookLensSize(control))
+          .borderRadius(this.getLookLensSize(control))
+          .border({ width: 2, color: '#F8FAFC' })
+      }
+      .width(this.getLookCameraBodyWidth(control))
+      .height(this.getLookCameraBodyHeight(control))
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .border({ width: 2, color: '#F8FAFC' })
+      .borderRadius(6)
+      .position({ x: Math.round((this.getRoundGlyphSize(control) - this.getLookCameraBodyWidth(control)) / 2),
+        y: Math.max(6, Math.round(this.getLookGlyphHeight(control) * 0.25)) })
+    }
+    .width(this.getRoundGlyphSize(control))
+    .height(this.getLookGlyphHeight(control))
+  }
+
+  @Builder
+  private buildSwipeHandle(controlId: string, handle: string) {
+    Column()
+      .width(CONTROL_SWIPE_HANDLE_SIZE)
+      .height(CONTROL_SWIPE_HANDLE_SIZE)
+      .backgroundColor(handle === 'start' ? '#E2E8F0' : '#FDE68A')
+      .borderRadius(CONTROL_SWIPE_HANDLE_SIZE)
+      .border({ width: 2, color: 'rgba(15, 23, 42, 0.72)' })
+      .onTouch((event) => {
+        const action = this.readTouchAction(event as Object);
+        if (action === TOUCH_ACTION_DOWN) {
+          this.startSwipeHandleDrag(controlId, handle);
+        }
+      })
+  }
+
+  @Builder
+  private buildSwipeOverlay(control: LayoutControlItem) {
+    Column({ space: CONTROL_LABEL_GAP }) {
+      Stack() {
+        Column({ space: SWIPE_DIRECTION_GAP }) {
+          this.buildSwipeDirectionIndicator(control)
+
+          Row({ space: 8 }) {
+            this.buildSwipeHandle(control.id, 'start')
+
+            Column()
+              .layoutWeight(1)
+              .height('100%')
+              .backgroundColor(this.getControlSurfaceColor(control))
+              .borderRadius(999)
+              .border({
+                width: this.selectedControlId === control.id ? 2 : 1,
+                color: this.selectedControlId === control.id ? '#FFFFFF' : 'rgba(255,255,255,0.35)',
+              })
+
+            this.buildSwipeHandle(control.id, 'end')
+          }
+          .width(this.getControlBodyWidthValue(control))
+          .height(this.getControlBodyHeightValue(control))
+          .alignItems(VerticalAlign.Center)
+          .justifyContent(FlexAlign.Center)
+        }
+        .rotate({ angle: this.getControlRotationAngle(control), x: 0, y: 0, z: 1, centerX: '50%', centerY: '50%' })
+      }
+      .width(this.getControlBodyWidthValue(control))
+      .height(this.getControlBodyHeightValue(control) + this.getSwipeDirectionOffsetValue(control))
+      .onTouch((event) => {
+        this.handleControlTouch(control.id, event as Object);
+      })
+
+      Text(control.label)
+        .width(this.getBindingCaptionWidthValue(control))
+        .fontSize(this.getControlNameFontSize(control))
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+      this.buildBindingCaption(control)
+    }
+    .width(this.getControlOverlayWidthValue(control))
+    .alignItems(HorizontalAlign.Center)
+    .position({
+      x: this.getControlOverlayXValue(control),
+      y: this.toCanvasYValue(control.y) - this.getSwipeDirectionOffsetValue(control),
+    })
+  }
+
+  @Builder
+  private buildStandardOverlay(control: LayoutControlItem) {
+    Column({ space: CONTROL_LABEL_GAP }) {
+      Stack() {
+        Column({ space: control.width <= 72 ? 4 : 8 }) {
+          if (this.isMoveControlType(control.inputKind)) {
+            this.buildMoveGlyph(control)
+          } else if (this.isLookControlType(control.inputKind)) {
+            this.buildLookGlyph(control)
+          }
+
+          Text(control.label)
+            .fontSize(this.getControlNameFontSize(control))
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#FFFFFF')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .textAlign(TextAlign.Center)
+            .width('100%')
+        }
+        .padding(8)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      }
+      .width(this.getControlBodyWidthValue(control))
+      .height(this.getControlBodyHeightValue(control))
+      .backgroundColor(this.getControlSurfaceColor(control))
+      .borderRadius(this.getControlBodyBorderRadius(control))
+      .border({
+        width: this.selectedControlId === control.id ? 2 : 1,
+        color: this.selectedControlId === control.id ? '#FFFFFF' : 'rgba(255,255,255,0.35)',
+      })
+      .onTouch((event) => {
+        this.handleControlTouch(control.id, event as Object);
+      })
+
+      this.buildBindingCaption(control)
+    }
+    .width(this.getControlOverlayWidthValue(control))
+    .alignItems(HorizontalAlign.Center)
+    .position({
+      x: this.getControlOverlayXValue(control),
+      y: this.toCanvasYValue(control.y),
+    })
+  }
+
+  @Builder
+  private buildControlOverlay(control: LayoutControlItem) {
+    if (control.inputKind === CONTROL_TYPE_SWIPE) {
+      this.buildSwipeOverlay(control)
+    } else {
+      this.buildStandardOverlay(control)
+    }
+  }
+
+  @Builder
+  private buildControlLibraryItem(libraryItem: ControlLibraryItem) {
+    Button(libraryItem.label)
+      .width('100%')
+      .backgroundColor('rgba(255, 255, 255, 0.12)')
+      .fontColor('#FFFFFF')
+      .onClick(() => {
+        this.addControlFromLibrary(libraryItem);
+      })
+  }
+
+  @Builder
+  private buildCanvasLayer() {
+    Stack() {
+      if (this.currentLayoutHasBackground) {
+        Image(this.currentLayoutBackgroundImageUri)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Contain)
+      } else {
+        Column({ space: 14 }) {
+          Text('导入背景图后开始布置控件')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#F8FAFC')
+
+          Text('画布会尽量全屏展示背景图。添加控件后，它会先出现在中央，再直接拖动到你想放置的位置。')
+            .fontSize(14)
+            .fontColor('#CBD5E1')
+            .textAlign(TextAlign.Center)
+
+          Button('选择背景图')
+            .backgroundColor(PRIMARY_COLOR)
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.importBackgroundImage();
+            })
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .padding(24)
+      }
+
+      if (this.currentLayoutHasBackground) {
+        ForEach(this.layoutControls, (control: LayoutControlItem) => {
+          this.buildControlOverlay(control)
+        }, (control: LayoutControlItem) => this.getControlRenderKey(control))
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#07111F')
+    .onTouch((event) => {
+      this.handleCanvasTouch(event as Object);
+    })
+    .parallelGesture(
+      PinchGesture({ fingers: 2, distance: 4 })
+        .onActionStart(() => {
+          this.startSelectedControlPinch();
+        })
+        .onActionUpdate((event) => {
+          this.updateSelectedControlPinch(event as Object);
+        })
+        .onActionEnd(() => {
+          this.finishSelectedControlPinch();
+        })
+    )
+    .onAreaChange((_, newValue) => {
+      this.updateCanvasSize(newValue as Object);
+    })
+  }
+
+  @Builder
+  private buildControlLibraryPanel() {
+    Column({ space: 10 }) {
+      Text('控件类型')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+        .width('100%')
+
+      Text('只保留六种泛型控件。放到画布后，再在下方绑定具体按键或轴。')
+        .fontSize(12)
+        .fontColor('#CBD5E1')
+        .width('100%')
+
+      Text('选中控件后会自动开始监听输入；滑动控件还能拖动两端圆点拉伸和转向。')
+        .fontSize(12)
+        .fontColor('#CBD5E1')
+        .width('100%')
+
+      ForEach(CONTROL_LIBRARY_ITEMS, (libraryItem: ControlLibraryItem) => {
+        this.buildControlLibraryItem(libraryItem)
+      }, (libraryItem: ControlLibraryItem) => libraryItem.controlType)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildSelectedControlPanel() {
+    Column({ space: 12 }) {
+      Text('当前控件')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+        .width('100%')
+
+      Text(this.controlEditorMessage)
+        .fontSize(12)
+        .fontColor('#E2E8F0')
+        .width('100%')
+
+      Text(`类型：${this.getSelectedControlTypeLabel()} · 绑定：${this.getSelectedControlBindingText()}`)
+        .fontSize(12)
+        .fontColor('#CBD5E1')
+        .width('100%')
+
+      Text(this.bindingCaptureHint)
+        .fontSize(12)
+        .fontColor(this.isBindingCaptureListening() ? '#FDE68A' : '#CBD5E1')
+        .width('100%')
+
+      Text('缩放改为手势操作：单指拖动位置，双指捏合缩放；滑动控件拖动两端调整点即可拉伸并改变角度。')
+        .fontSize(12)
+        .fontColor('#94A3B8')
+        .width('100%')
+
+      Row({ space: 12 }) {
+        Button('重新监听')
+          .layoutWeight(1)
+          .enabled(this.hasSelectedControl())
+          .backgroundColor('rgba(255, 255, 255, 0.14)')
+          .fontColor('#FFFFFF')
+          .onClick(() => {
+            if (this.selectedControlId.length > 0) {
+              this.armBindingCapture(this.selectedControlId);
+              this.updateControlEditorMessage();
+            }
+          })
+
+        Button('清除绑定')
+          .layoutWeight(1)
+          .enabled(this.hasSelectedControl())
+          .backgroundColor('rgba(255, 255, 255, 0.14)')
+          .fontColor('#FFFFFF')
+          .onClick(() => {
+            this.clearSelectedBinding();
+          })
+
+        Button('删除选中')
+          .layoutWeight(1)
+          .enabled(this.hasSelectedControl())
+          .backgroundColor('#FEE4E2')
+          .fontColor('#B42318')
+          .onClick(() => {
+            this.removeSelectedControl();
+          })
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildFloatingMenuPanel() {
+    Column({ space: 12 }) {
+      Row({ space: 8 }) {
+        Text('操作菜单')
+          .layoutWeight(1)
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+
+        Button('收起')
+          .backgroundColor('rgba(255, 255, 255, 0.12)')
+          .fontColor('#FFFFFF')
+          .onClick(() => {
+            this.menuExpanded = false;
+          })
+      }
+      .width('100%')
+
+      Scroll() {
+        Column({ space: 12 }) {
+          Column({ space: 8 }) {
+            Text(this.currentLayoutName)
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#FFFFFF')
+              .width('100%')
+
+            Text(`${this.connectedDeviceName} · ${this.currentLayoutHasBackground ? '背景已导入' : '未导入背景'}`)
+              .fontSize(12)
+              .fontColor('#CBD5E1')
+              .width('100%')
+
+            Text(this.getLayoutRepositoryMetricsText())
+              .fontSize(12)
+              .fontColor('#CBD5E1')
+              .width('100%')
+
+            Text(this.getBackgroundDescription())
+              .fontSize(12)
+              .fontColor('#94A3B8')
+              .width('100%')
+
+            Text(this.getNativeInputMetricsText())
+              .fontSize(11)
+              .fontColor('#94A3B8')
+              .width('100%')
+          }
+          .width('100%')
+          .padding(14)
+          .backgroundColor('rgba(255, 255, 255, 0.08)')
+          .borderRadius(20)
+
+          Row({ space: 8 }) {
+            Button('返回设备页')
+              .layoutWeight(1)
+              .backgroundColor('rgba(255, 255, 255, 0.12)')
+              .fontColor('#FFFFFF')
+              .onClick(() => {
+                router.back();
+              })
+
+            Button(this.currentLayoutHasBackground ? '更换背景图' : '导入背景图')
+              .layoutWeight(1)
+              .backgroundColor(PRIMARY_COLOR)
+              .fontColor('#FFFFFF')
+              .onClick(() => {
+                this.importBackgroundImage();
+              })
+          }
+          .width('100%')
+
+          Row({ space: 8 }) {
+            Button(this.controlLibraryExpanded ? '收起控件类型' : '展开控件类型')
+              .layoutWeight(1)
+              .enabled(this.currentLayoutHasBackground)
+              .backgroundColor('rgba(255, 255, 255, 0.12)')
+              .fontColor('#FFFFFF')
+              .onClick(() => {
+                this.controlLibraryExpanded = !this.controlLibraryExpanded;
+              })
+
+            Button('清除背景图')
+              .layoutWeight(1)
+              .enabled(this.currentLayoutHasBackground)
+              .backgroundColor('rgba(127, 29, 29, 0.84)')
+              .fontColor('#FFFFFF')
+              .onClick(() => {
+                this.clearBackgroundImage();
+              })
+          }
+          .width('100%')
+
+          if (this.controlLibraryExpanded) {
+            Column({ space: 10 }) {
+              this.buildControlLibraryPanel()
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor('rgba(255, 255, 255, 0.08)')
+            .borderRadius(20)
+          }
+
+          Column({ space: 10 }) {
+            this.buildSelectedControlPanel()
+          }
+          .width('100%')
+          .padding(14)
+          .backgroundColor('rgba(255, 255, 255, 0.08)')
+          .borderRadius(20)
+        }
+        .width('100%')
+      }
+      .layoutWeight(1)
+      .scrollable(ScrollDirection.Vertical)
+      .scrollBar(BarState.Off)
+      .width('100%')
+    }
+    .width(MENU_PANEL_WIDTH)
+    .height(this.getMenuPanelHeight())
+    .padding(14)
+    .backgroundColor('rgba(2, 6, 23, 0.88)')
+    .borderRadius(24)
+    .position({
+      x: this.getMenuPanelX(),
+      y: this.getMenuPanelY(),
+    })
+  }
+
+  @Builder
+  private buildFloatingMenuButton() {
+    Column({ space: 2 }) {
+      Text('菜单')
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#FFFFFF')
+
+      Text(this.menuExpanded ? '▲' : '▼')
+        .fontSize(10)
+        .fontColor('#CBD5E1')
+    }
+    .width(MENU_BUTTON_WIDTH)
+    .height(MENU_BUTTON_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('rgba(15, 23, 42, 0.88)')
+    .borderRadius(22)
+    .border({
+      width: 1,
+      color: 'rgba(255,255,255,0.20)',
+    })
+    .position({
+      x: this.menuButtonX,
+      y: this.menuButtonY,
+    })
+    .onTouch((event) => {
+      this.handleMenuButtonTouch(event as Object);
+    })
+  }
+
+  build() {
+    Stack() {
+      this.buildCanvasLayer()
+
+      if (this.menuExpanded) {
+        this.buildFloatingMenuPanel()
+      }
+
+      this.buildFloatingMenuButton()
+    }
+    .backgroundColor('#07111F')
+    .height('100%')
+    .width('100%')
+    .onAreaChange((_, newValue) => {
+      this.updateViewportSize(newValue as Object);
+    })
+    .focusable(true)
+    .onKeyEvent((event) => {
+      return this.handleKeyBindingEvent(event as Object);
+    })
+    .onMouse((event) => {
+      this.handleMouseBindingEvent(event as Object);
+    })
+  }
+}

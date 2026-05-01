@@ -1,7 +1,8 @@
 import type commonAbility from '@ohos.app.ability.common';
-import { AbsoluteTouchHidService, HidDebugState, RemoteDeviceItem } from '../services/AbsoluteTouchHidService';
+import router from '@ohos.router';
+import { HidDebugState, RemoteDeviceItem } from '../services/AbsoluteTouchHidService';
+import { hidService } from '../services/AppSession';
 
-const hidService = new AbsoluteTouchHidService();
 const PRIMARY_COLOR = '#1456F0';
 const SUCCESS_COLOR = '#0D8A5F';
 const WARNING_COLOR = '#B06A00';
@@ -42,24 +43,33 @@ struct StatusChip {
 struct Index {
   private hostContext = this.getUIContext().getHostContext() as commonAbility.UIAbilityContext;
   private lastShownError: string = '';
+  private lastConnectionState: boolean = hidService.getState().connected;
   @State debugState: HidDebugState = hidService.getState();
   @State devices: Array<RemoteDeviceItem> = hidService.getDevices();
   @State selectedDeviceId: string = hidService.getPendingRemoteAddress();
   @State isPreparing: boolean = false;
+  @State navigatingToLayoutEditor: boolean = false;
 
   aboutToAppear(): void {
+    this.navigatingToLayoutEditor = false;
     this.refreshFromService();
+    this.lastConnectionState = this.debugState.connected;
     hidService.setStateListener((state: HidDebugState, devices: Array<RemoteDeviceItem>) => {
+      const wasConnected = this.lastConnectionState;
       this.debugState = state;
       this.devices = this.cloneDevices(devices);
       this.selectedDeviceId = hidService.getPendingRemoteAddress();
+      if (!wasConnected && state.connected) {
+        this.navigateToLayoutEditor();
+      }
+      this.lastConnectionState = state.connected;
     });
     this.enterDeviceSelectionStage();
   }
 
   aboutToDisappear(): void {
     hidService.setStateListener(null);
-    hidService.destroy();
+    this.navigatingToLayoutEditor = false;
   }
 
   private refreshFromService(): void {
@@ -68,6 +78,20 @@ struct Index {
     this.debugState = state;
     this.devices = this.cloneDevices(devices);
     this.selectedDeviceId = hidService.getPendingRemoteAddress();
+  }
+
+  private async navigateToLayoutEditor(): Promise<void> {
+    if (this.navigatingToLayoutEditor) {
+      return;
+    }
+
+    this.navigatingToLayoutEditor = true;
+    try {
+      await router.pushUrl({ url: 'pages/LayoutEditor' });
+    } catch (_) {
+      this.navigatingToLayoutEditor = false;
+      await this.showActionError('页面跳转失败', '蓝牙连接已建立，但无法打开布局页。');
+    }
   }
 
   private cloneDevices(devices: Array<RemoteDeviceItem>): Array<RemoteDeviceItem> {
@@ -479,6 +503,17 @@ struct Index {
                   hidService.startDiscovery();
                 }
                 this.refreshFromService();
+              })
+          }
+
+          if (this.debugState.connected) {
+            Button('前往键位布局准备')
+              .width('100%')
+              .enabled(!this.navigatingToLayoutEditor)
+              .backgroundColor('#101828')
+              .fontColor('#FFFFFF')
+              .onClick(() => {
+                this.navigateToLayoutEditor();
               })
           }
         }
