@@ -13,17 +13,27 @@ struct StatusChip {
   @Prop active: boolean = false;
 
   build() {
-    Row({ space: 6 }) {
-      Text(this.active ? '已完成' : '未完成')
-        .fontSize(11)
-        .fontColor('#FFFFFF')
-        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-        .backgroundColor(this.active ? SUCCESS_COLOR : WARNING_COLOR)
-        .borderRadius(999)
+    Row() {
       Text(this.label)
+        .layoutWeight(1)
         .fontSize(14)
         .fontColor('#1E2430')
+        .textAlign(TextAlign.End)
+        .padding({ right: 8 })
+
+      Row() {
+        Text(this.active ? '已完成' : '未完成')
+          .fontSize(11)
+          .fontColor('#FFFFFF')
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(this.active ? SUCCESS_COLOR : WARNING_COLOR)
+          .borderRadius(999)
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Start)
+      .padding({ left: 8 })
     }
+    .width('100%')
   }
 }
 
@@ -80,6 +90,31 @@ struct Index {
 
   private hasDiscoveryEvidence(devices: Array<RemoteDeviceItem>): boolean {
     return devices.some((device: RemoteDeviceItem) => !device.isPaired || !this.isOfflineSignal(device.rssi));
+  }
+
+  private getSelectedDevice(): RemoteDeviceItem | null {
+    if (this.selectedDeviceId.length === 0) {
+      return null;
+    }
+
+    for (const device of this.devices) {
+      if (device.deviceId === this.selectedDeviceId) {
+        return device;
+      }
+    }
+
+    return null;
+  }
+
+  private getSelectedDeviceName(): string {
+    const selectedDevice = this.getSelectedDevice();
+    if (selectedDevice !== null) {
+      return selectedDevice.name || '未命名设备';
+    }
+    if (this.selectedDeviceId.length > 0) {
+      return '未知设备';
+    }
+    return '未选择设备';
   }
 
   private getDeviceRenderKey(device: RemoteDeviceItem): string {
@@ -212,6 +247,42 @@ struct Index {
     return this.isBluetoothReady() && this.isHidReady() && this.isDiscoveryReady();
   }
 
+  private hasSelectedDevice(): boolean {
+    return this.getSelectedDevice() !== null;
+  }
+
+  private showSelectedDeviceVirtualMac(): void {
+    const selectedDevice = this.getSelectedDevice();
+    if (selectedDevice !== null) {
+      this.showVirtualMacDetails(selectedDevice);
+    }
+  }
+
+  @Builder
+  private buildCurrentSelectionRow() {
+    Row() {
+      Text('连接设备')
+        .layoutWeight(1)
+        .fontSize(14)
+        .fontColor('#1E2430')
+        .textAlign(TextAlign.End)
+        .padding({ right: 8 })
+
+      Text(this.getSelectedDeviceName())
+        .layoutWeight(1)
+        .fontSize(13)
+        .fontColor(this.hasSelectedDevice() ? PRIMARY_COLOR : '#667085')
+        .textAlign(TextAlign.Start)
+        .padding({ left: 8 })
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .onClick(() => {
+      this.showSelectedDeviceVirtualMac();
+    })
+  }
+
   private isDeviceConnected(device: RemoteDeviceItem): boolean {
     return this.debugState.connected && this.debugState.lastConnectedDeviceId === device.deviceId;
   }
@@ -222,10 +293,6 @@ struct Index {
 
   private isDevicePairing(device: RemoteDeviceItem): boolean {
     return this.debugState.pairingDeviceId === device.deviceId;
-  }
-
-  private isDeviceBusyById(deviceId: string): boolean {
-    return this.debugState.lastConnectedDeviceId === deviceId || this.debugState.connectingDeviceId === deviceId || this.debugState.pairingDeviceId === deviceId;
   }
 
   private isOfflineSignal(rssi: number): boolean {
@@ -272,32 +339,32 @@ struct Index {
       .backgroundColor('#FFF1F3')
       .borderRadius(999)
     } else {
-    Row({ space: 2 }) {
-      Column()
-        .width(4)
-        .height(6)
-        .borderRadius(2)
-        .backgroundColor(this.getSignalLevel(rssi) >= 1 ? PRIMARY_COLOR : '#D0D5DD')
-      Column()
-        .width(4)
-        .height(9)
-        .borderRadius(2)
-        .backgroundColor(this.getSignalLevel(rssi) >= 2 ? PRIMARY_COLOR : '#D0D5DD')
-      Column()
-        .width(4)
-        .height(12)
-        .borderRadius(2)
-        .backgroundColor(this.getSignalLevel(rssi) >= 3 ? PRIMARY_COLOR : '#D0D5DD')
-      Column()
-        .width(4)
-        .height(15)
-        .borderRadius(2)
-        .backgroundColor(this.getSignalLevel(rssi) >= 4 ? PRIMARY_COLOR : '#D0D5DD')
-    }
-    .alignItems(VerticalAlign.Bottom)
-    .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-    .backgroundColor('#EEF4FF')
-    .borderRadius(999)
+      Row({ space: 2 }) {
+        Column()
+          .width(4)
+          .height(6)
+          .borderRadius(2)
+          .backgroundColor(this.getSignalLevel(rssi) >= 1 ? PRIMARY_COLOR : '#D0D5DD')
+        Column()
+          .width(4)
+          .height(9)
+          .borderRadius(2)
+          .backgroundColor(this.getSignalLevel(rssi) >= 2 ? PRIMARY_COLOR : '#D0D5DD')
+        Column()
+          .width(4)
+          .height(12)
+          .borderRadius(2)
+          .backgroundColor(this.getSignalLevel(rssi) >= 3 ? PRIMARY_COLOR : '#D0D5DD')
+        Column()
+          .width(4)
+          .height(15)
+          .borderRadius(2)
+          .backgroundColor(this.getSignalLevel(rssi) >= 4 ? PRIMARY_COLOR : '#D0D5DD')
+      }
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+      .backgroundColor('#EEF4FF')
+      .borderRadius(999)
     }
   }
 
@@ -317,9 +384,10 @@ struct Index {
           Row() {
             this.buildSignalBadge(device.rssi)
           }
-            .onClick(() => {
-              this.showSignalDetails(device);
-            })
+          .onClick(() => {
+            this.showSignalDetails(device);
+          })
+
           Text(device.isPaired ? '已配对' : '未配对')
             .fontSize(12)
             .fontColor(device.isPaired ? SUCCESS_COLOR : WARNING_COLOR)
@@ -381,20 +449,13 @@ struct Index {
             .fontColor('#667085')
             .width('100%')
 
-          Row({ space: 10 }) {
+          Column({ space: 10 }) {
             StatusChip({ label: '打开蓝牙', active: this.isBluetoothReady() })
             StatusChip({ label: '注册HID', active: this.isHidReady() })
-          }
-
-          Row({ space: 10 }) {
             StatusChip({ label: '启用设备发现', active: this.isDiscoveryReady() })
-            if (this.selectedDeviceId.length > 0) {
-              Text('当前选择：' + this.selectedDeviceId)
-                .fontSize(12)
-                .fontColor('#475467')
-                .layoutWeight(1)
-            }
+            this.buildCurrentSelectionRow()
           }
+          .width('100%')
 
           Row({ space: 12 }) {
             Button(this.isPreparing ? '正在准备...' : '重新准备')
