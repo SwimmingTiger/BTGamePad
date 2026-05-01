@@ -89,8 +89,9 @@ struct Index {
     try {
       await router.pushUrl({ url: 'pages/LayoutEditor' });
     } catch (_) {
-      this.navigatingToLayoutEditor = false;
       await this.showActionError('页面跳转失败', '蓝牙连接已建立，但无法打开布局页。');
+    } finally {
+      this.navigatingToLayoutEditor = false;
     }
   }
 

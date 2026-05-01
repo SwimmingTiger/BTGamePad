@@ -18,14 +18,15 @@ const TOUCH_ACTION_CANCEL = 3;
 const CONTROL_CANVAS_UNITS = 1000;
 const STICK_CONTROL_DEFAULT_SIZE = 120;
 const KEYBOARD_CONTROL_DEFAULT_SIZE = 108;
+const LOOK_CONTROL_DEFAULT_SIZE = 250;
 const BUTTON_CONTROL_DEFAULT_SIZE = 76;
 const CONTROL_DEFAULT_SIZE = BUTTON_CONTROL_DEFAULT_SIZE;
 const CONTROL_MIN_SIZE = 56;
 const CONTROL_MAX_SIZE = 320;
 const ROUND_CONTROL_MIN_SIZE = 36;
-const LOOK_CONTROL_ASPECT_RATIO = 1.42;
+const LOOK_CONTROL_ASPECT_RATIO = 1.2;
 const LOOK_CONTROL_MIN_WIDTH = 72;
-const LOOK_CONTROL_MIN_HEIGHT = 52;
+const LOOK_CONTROL_MIN_HEIGHT = 60;
 const CONTROL_SWIPE_DEFAULT_WIDTH = 172;
 const CONTROL_SWIPE_DEFAULT_HEIGHT = 52;
 const CONTROL_SWIPE_MIN_LENGTH = 104;
@@ -169,9 +170,9 @@ class SwipeHandlePositions {
 
 const CONTROL_LIBRARY_ITEMS: Array<ControlLibraryItem> = [
   new ControlLibraryItem('摇杆移动', CONTROL_TYPE_STICK_MOVE, 'touch', STICK_CONTROL_DEFAULT_SIZE),
-  new ControlLibraryItem('摇杆视角', CONTROL_TYPE_STICK_LOOK, 'touch', STICK_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('摇杆视角', CONTROL_TYPE_STICK_LOOK, 'touch', LOOK_CONTROL_DEFAULT_SIZE),
   new ControlLibraryItem('键盘移动', CONTROL_TYPE_KEYBOARD_MOVE, 'touch', KEYBOARD_CONTROL_DEFAULT_SIZE),
-  new ControlLibraryItem('键盘视角', CONTROL_TYPE_KEYBOARD_LOOK, 'touch', KEYBOARD_CONTROL_DEFAULT_SIZE),
+  new ControlLibraryItem('键盘视角', CONTROL_TYPE_KEYBOARD_LOOK, 'touch', LOOK_CONTROL_DEFAULT_SIZE),
   new ControlLibraryItem('按钮', CONTROL_TYPE_BUTTON, 'touch', BUTTON_CONTROL_DEFAULT_SIZE),
   new ControlLibraryItem('滑动', CONTROL_TYPE_SWIPE, 'swipe', CONTROL_SWIPE_DEFAULT_WIDTH),
 ];
@@ -300,9 +301,9 @@ struct LayoutEditor {
   @State currentLayoutHasBackground: boolean = false;
   @State layoutControls: Array<LayoutControlItem> = [];
   @State selectedControlId: string = '';
-  @State controlEditorMessage: string = '先导入背景图，再添加控件。';
+  @State controlEditorMessage: string = '先导入被控游戏截图，再添加控件。';
   @State bindingCaptureState: string = 'idle';
-  @State bindingCaptureHint: string = '选中控件后，按手柄、键盘或鼠标完成绑定。';
+  @State bindingCaptureHint: string = '选中控件后，未绑定控件会自动监听输入。';
   @State bindingCaptureTargetId: string = '';
   @State menuExpanded: boolean = false;
   @State controlLibraryExpanded: boolean = false;
@@ -348,6 +349,9 @@ struct LayoutEditor {
       const currentWindow = await window.getLastWindow(this.hostContext);
       this.editorWindow = currentWindow;
       await currentWindow.setPreferredOrientation(window.Orientation.LANDSCAPE);
+      await currentWindow.setWindowLayoutFullScreen(true);
+      await currentWindow.setWindowSystemBarEnable([]);
+      await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
     } catch (error) {
       const errorObject = error as Object;
       hilog.warn(LOG_DOMAIN, LOG_TAG, 'configure editor window failed: %{public}s', JSON.stringify(errorObject));
@@ -361,10 +365,24 @@ struct LayoutEditor {
       return;
     }
 
-    currentWindow.setPreferredOrientation(window.Orientation.PORTRAIT)
-      .catch((error: Object) => {
-        hilog.warn(LOG_DOMAIN, LOG_TAG, 'restore editor window failed: %{public}s', JSON.stringify(error));
-      });
+    void (async () => {
+      try {
+        await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', true, false);
+      } catch (_) {
+      }
+
+      try {
+        await currentWindow.setWindowSystemBarEnable(['status', 'navigation']);
+      } catch (_) {
+      }
+
+      try {
+        await currentWindow.setWindowLayoutFullScreen(false);
+        await currentWindow.setPreferredOrientation(window.Orientation.PORTRAIT);
+      } catch (error) {
+        hilog.warn(LOG_DOMAIN, LOG_TAG, 'restore editor window failed: %{public}s', JSON.stringify(error as Object));
+      }
+    })();
   }
 
   private async initializeLayoutRepository(): Promise<void> {
@@ -451,7 +469,7 @@ struct LayoutEditor {
     } else if (this.isLookControlType(normalizedControl.inputKind)) {
       const nextWidth = Math.max(normalizedControl.width, normalizedControl.height);
       normalizedControl.width = clampEditorValue(
-        nextWidth > 0 ? nextWidth : KEYBOARD_CONTROL_DEFAULT_SIZE,
+        nextWidth > 0 ? nextWidth : LOOK_CONTROL_DEFAULT_SIZE,
         LOOK_CONTROL_MIN_WIDTH,
         CONTROL_MAX_SIZE
       );
@@ -1199,7 +1217,7 @@ struct LayoutEditor {
     this.resetPendingDirectionalBinding();
     this.bindingCaptureState = 'bound';
     this.bindingCaptureTargetId = boundControl.id;
-    this.bindingCaptureHint = `已绑定 ${formattedBindingLabel}，来源 ${formattedSourceLabel}。`;
+    this.bindingCaptureHint = `已绑定 ${formattedBindingLabel}，来源 ${formattedSourceLabel}；当前已锁定，如需重绑请先清除绑定。`;
     this.updateControlEditorMessage();
   }
 
@@ -1229,7 +1247,7 @@ struct LayoutEditor {
     this.resetPendingDirectionalBinding();
     this.bindingCaptureState = 'bound';
     this.bindingCaptureTargetId = boundControl.id;
-    this.bindingCaptureHint = `已完成四向绑定 ${bindingLabel}。`;
+    this.bindingCaptureHint = `已完成四向绑定 ${bindingLabel}；当前已锁定，如需重绑请先清除绑定。`;
     this.updateControlEditorMessage();
   }
 
@@ -1254,7 +1272,7 @@ struct LayoutEditor {
       payload.directionalKeyLabels = '';
     });
     await this.replaceSelectedControl(currentLayout, clearedControl);
-    this.armBindingCapture(clearedControl.id);
+    this.syncBindingCaptureWithSelectedControl();
     this.updateControlEditorMessage();
   }
 
@@ -1263,24 +1281,21 @@ struct LayoutEditor {
       this.selectedControlId = '';
       this.bindingCaptureState = 'idle';
       this.bindingCaptureTargetId = '';
-      this.bindingCaptureHint = '选中控件后，按手柄、键盘或鼠标完成绑定。';
+      this.bindingCaptureHint = '选中控件后，未绑定控件会自动监听输入。';
       return;
     }
 
-    const previousSelectedControlId = this.selectedControlId;
     const hasSelectedControl = this.layoutControls.some((control: LayoutControlItem) => control.id === this.selectedControlId);
     if (!hasSelectedControl) {
       this.selectedControlId = this.layoutControls[0].id;
     }
 
-    if (this.selectedControlId !== previousSelectedControlId || this.bindingCaptureTargetId.length === 0) {
-      this.armBindingCapture(this.selectedControlId);
-    }
+    this.syncBindingCaptureWithSelectedControl();
   }
 
   private updateControlEditorMessage(): void {
     if (!this.currentLayoutHasBackground) {
-      this.controlEditorMessage = '先导入背景图，再添加控件。';
+      this.controlEditorMessage = '先导入被控游戏截图，再添加控件。';
       return;
     }
 
@@ -1291,14 +1306,14 @@ struct LayoutEditor {
 
     const selectedControl = this.getSelectedControl();
     if (selectedControl === null) {
-      this.controlEditorMessage = '请选择一个控件，系统会直接开始监听绑定输入。';
+      this.controlEditorMessage = '请选择一个控件；未绑定控件会自动监听，已绑定控件默认锁定。';
       return;
     }
 
     const gestureHint = selectedControl.inputKind === CONTROL_TYPE_SWIPE
       ? '拖动两端圆点可拉伸并改变角度，双指捏合可整体缩放。'
       : '单指拖动位置，双指捏合缩放。';
-    this.controlEditorMessage = `当前选中 ${selectedControl.label}，已绑定 ${this.getControlBindingLabel(selectedControl)}，位置 ${Math.round(selectedControl.x / 10)}%, ${Math.round(selectedControl.y / 10)}%，尺寸 ${Math.round(selectedControl.width / 10)}% x ${Math.round(selectedControl.height / 10)}%。${this.bindingCaptureHint}${gestureHint}`;
+    this.controlEditorMessage = `当前选中 ${selectedControl.label}，位置 ${Math.round(selectedControl.x / 10)}%, ${Math.round(selectedControl.y / 10)}%，尺寸 ${Math.round(selectedControl.width / 10)}% x ${Math.round(selectedControl.height / 10)}%。${gestureHint}`;
   }
 
   private getSelectedControl(): LayoutControlItem | null {
@@ -1314,33 +1329,41 @@ struct LayoutEditor {
     return this.getSelectedControl() !== null;
   }
 
+  private hasSelectedControlBinding(): boolean {
+    const selectedControl = this.getSelectedControl();
+    return selectedControl !== null && this.hasControlBinding(selectedControl);
+  }
+
   private selectControl(controlId: string): void {
-    const selectionChanged = this.selectedControlId !== controlId;
     this.selectedControlId = controlId;
-    if (selectionChanged || this.bindingCaptureTargetId !== controlId || this.bindingCaptureState === 'idle') {
-      this.armBindingCapture(controlId);
-    }
+    this.syncBindingCaptureWithSelectedControl();
     this.updateControlEditorMessage();
   }
 
-  private armBindingCapture(controlId: string): void {
-    const control = this.findLocalControl(controlId);
+  private syncBindingCaptureWithSelectedControl(): void {
+    const control = this.findLocalControl(this.selectedControlId);
     if (control === null) {
+      this.resetPendingDirectionalBinding();
+      this.bindingCaptureState = 'idle';
+      this.bindingCaptureTargetId = '';
+      this.bindingCaptureHint = '选中控件后，未绑定控件会自动监听输入。';
       return;
     }
 
     this.resetPendingDirectionalBinding();
+    this.bindingCaptureTargetId = control.id;
+    if (this.hasControlBinding(control)) {
+      this.bindingCaptureState = 'bound';
+      this.bindingCaptureHint = `当前已锁定；如需重绑，请先清除绑定。`;
+      return;
+    }
+
     this.bindingCaptureState = 'listening';
-    this.bindingCaptureTargetId = controlId;
     if (this.isDirectionalKeyboardControlType(control.inputKind)) {
       this.updateDirectionalBindingHint(control);
       return;
     }
-    if (!this.hasControlBinding(control)) {
-      this.bindingCaptureHint = this.getUnboundBindingHint(control);
-      return;
-    }
-    this.bindingCaptureHint = `正在监听 ${control.label} 的输入，输入新的操作可重新绑定。`;
+    this.bindingCaptureHint = this.getUnboundBindingHint(control);
   }
 
   private isBindingCaptureListening(): boolean {
@@ -1349,7 +1372,7 @@ struct LayoutEditor {
 
   private async addControlFromLibrary(libraryItem: ControlLibraryItem): Promise<void> {
     if (!this.currentLayoutHasBackground) {
-      await this.showActionError('无法添加控件', '请先为当前布局导入背景图，再开始布置控件。');
+      await this.showActionError('无法添加控件', '请先为当前布局导入被控游戏截图，再开始布置控件。');
       return;
     }
 
@@ -1722,7 +1745,7 @@ struct LayoutEditor {
     }
 
     if (!this.menuButtonInitialized) {
-      this.menuButtonX = this.getClampedMenuButtonX(width - MENU_BUTTON_WIDTH - MENU_EDGE_MARGIN);
+      this.menuButtonX = this.getClampedMenuButtonX(MENU_EDGE_MARGIN);
       this.menuButtonY = this.getClampedMenuButtonY(MENU_EDGE_MARGIN);
       this.menuButtonInitialized = true;
       return;
@@ -1935,7 +1958,7 @@ struct LayoutEditor {
   private async importBackgroundImage(): Promise<void> {
     const currentLayout = layoutRepository.getCurrentLayout();
     if (currentLayout === null) {
-      await this.showActionError('导入失败', '当前没有可用布局，暂时无法绑定背景图。');
+      await this.showActionError('导入失败', '当前没有可用布局，暂时无法设置被控游戏截图。');
       return;
     }
 
@@ -1949,6 +1972,7 @@ struct LayoutEditor {
         return;
       }
 
+      const previousBackgroundUri = currentLayout.backgroundImageUri;
       const backgroundUri = await this.copyBackgroundIntoSandbox(currentLayout.id, selectedUris[0]);
       const updatedLayout = currentLayout.clone();
       updatedLayout.backgroundImageUri = backgroundUri;
@@ -1956,10 +1980,13 @@ struct LayoutEditor {
       await layoutRepository.saveLayout(updatedLayout);
       this.applyLayout(updatedLayout);
       this.refreshLayoutSummary();
+      if (previousBackgroundUri !== backgroundUri) {
+        await this.deleteManagedBackgroundImage(previousBackgroundUri);
+      }
     } catch (error) {
       const errorObject = error as Object;
       hilog.error(LOG_DOMAIN, LOG_TAG, 'import background failed: %{public}s', JSON.stringify(errorObject));
-      await this.showActionError('导入失败', '无法导入背景图，请确认已选择图片文件。');
+      await this.showActionError('导入失败', '无法导入被控游戏截图，请确认已选择图片文件。');
     }
   }
 
@@ -1970,21 +1997,23 @@ struct LayoutEditor {
     }
 
     try {
+      const previousBackgroundUri = currentLayout.backgroundImageUri;
       const updatedLayout = currentLayout.clone();
       updatedLayout.backgroundImageUri = '';
       updatedLayout.updatedAt = Date.now();
       await layoutRepository.saveLayout(updatedLayout);
       this.applyLayout(updatedLayout);
       this.refreshLayoutSummary();
+      await this.deleteManagedBackgroundImage(previousBackgroundUri);
     } catch (error) {
       const errorObject = error as Object;
       hilog.error(LOG_DOMAIN, LOG_TAG, 'clear background failed: %{public}s', JSON.stringify(errorObject));
-      await this.showActionError('清除失败', '当前背景图绑定无法清除，请稍后重试。');
+      await this.showActionError('清除失败', '当前被控游戏截图无法清除，请稍后重试。');
     }
   }
 
   private async copyBackgroundIntoSandbox(layoutId: string, sourceUri: string): Promise<string> {
-    const directoryPath = `${this.hostContext.filesDir}/${BACKGROUND_DIRECTORY_NAME}`;
+    const directoryPath = this.getManagedBackgroundDirectoryPath();
     try {
       await fs.mkdir(directoryPath, true);
     } catch (_) {
@@ -1992,7 +2021,7 @@ struct LayoutEditor {
 
     try {
       const extension = this.getUriExtension(sourceUri);
-      const destinationPath = `${directoryPath}/${layoutId}${extension}`;
+      const destinationPath = `${directoryPath}/${layoutId}-${Date.now()}${extension}`;
       const destinationUri = fileUri.getUriFromPath(destinationPath);
       await fs.copy(sourceUri, destinationUri);
       return destinationUri;
@@ -2014,6 +2043,41 @@ struct LayoutEditor {
 
     const extension = fileName.substring(lastDotIndex).toLowerCase();
     return extension.length > 0 ? extension : '.png';
+  }
+
+  private getManagedBackgroundDirectoryPath(): string {
+    return `${this.hostContext.filesDir}/${BACKGROUND_DIRECTORY_NAME}`;
+  }
+
+  private getManagedBackgroundImagePath(uri: string): string {
+    const normalizedUri = uri.trim();
+    if (normalizedUri.length === 0) {
+      return '';
+    }
+
+    try {
+      const imagePath = new fileUri.FileUri(normalizedUri).path;
+      const directoryPath = this.getManagedBackgroundDirectoryPath();
+      return imagePath.startsWith(`${directoryPath}/`) ? imagePath : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  private async deleteManagedBackgroundImage(uri: string): Promise<void> {
+    const imagePath = this.getManagedBackgroundImagePath(uri);
+    if (imagePath.length === 0) {
+      return;
+    }
+
+    try {
+      if (!(await fs.access(imagePath))) {
+        return;
+      }
+      await fs.unlink(imagePath);
+    } catch (error) {
+      hilog.warn(LOG_DOMAIN, LOG_TAG, 'delete managed background failed: %{public}s', JSON.stringify(error as Object));
+    }
   }
 
   private async showActionError(title: string, message: string): Promise<void> {
@@ -2357,12 +2421,12 @@ struct LayoutEditor {
   }
 
   private getConnectionDescription(): string {
-    return '当前页面会把背景图尽量铺满画布，操作集中在右上角可拖动的浮层菜单。';
+    return '当前页面会把被控游戏截图尽量铺满画布，操作集中在左上角浮层菜单。';
   }
 
   private getNativeInputDescription(): string {
     if (this.nativeInputState.monitoringStarted) {
-      return '原生输入桥已经就绪，选中控件后会直接监听这里的手柄输入。';
+      return '原生输入桥已经就绪，未绑定控件会直接监听这里的手柄输入。';
     }
 
     if (this.nativeInputState.lastErrorCode !== 0) {
@@ -2377,7 +2441,7 @@ struct LayoutEditor {
   }
 
   private getLayoutRepositoryDescription(): string {
-    return '先把泛型控件放到画布中央，再选中它并直接按手柄、键盘或鼠标完成绑定。';
+    return '先把泛型控件放到画布中央；未绑定控件会自动监听，已绑定控件默认锁定。';
   }
 
   private getLayoutRepositoryMetricsText(): string {
@@ -2386,10 +2450,10 @@ struct LayoutEditor {
 
   private getBackgroundDescription(): string {
     if (this.currentLayoutBackgroundImageUri.length > 0) {
-      return '背景图已导入，画布会尽量按全屏展示。';
+      return '被控游戏截图已导入，画布会尽量按全屏展示。';
     }
 
-    return '当前布局还未绑定背景图，请先导入截图再摆放控件。';
+    return '当前布局还未设置被控游戏截图，请先导入截图再摆放控件。';
   }
 
   private getSelectedControlTypeLabel(): string {
@@ -2799,17 +2863,17 @@ struct LayoutEditor {
           .objectFit(ImageFit.Contain)
       } else {
         Column({ space: 14 }) {
-          Text('导入背景图后开始布置控件')
+          Text('导入被控游戏截图后开始布置控件')
             .fontSize(24)
             .fontWeight(FontWeight.Bold)
             .fontColor('#F8FAFC')
 
-          Text('画布会尽量全屏展示背景图。添加控件后，它会先出现在中央，再直接拖动到你想放置的位置。')
+          Text('截图用于辅助定位控件位置。\n请对运行游戏的设备进行全屏截图，不要调整截图分辨率。\n导入截图后，点击左上角按钮开始添加控件。')
             .fontSize(14)
             .fontColor('#CBD5E1')
             .textAlign(TextAlign.Center)
 
-          Button('选择背景图')
+          Button('导入被控游戏截图')
             .backgroundColor(PRIMARY_COLOR)
             .fontColor('#FFFFFF')
             .onClick(() => {
@@ -2855,18 +2919,23 @@ struct LayoutEditor {
   @Builder
   private buildControlLibraryPanel() {
     Column({ space: 10 }) {
-      Text('控件类型')
+      Text('添加控件')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
         .width('100%')
 
-      Text('只保留六种泛型控件。放到画布后，再在下方绑定具体按键或轴。')
+      Text('控件默认位于画布中央，可自行拖动到想要的位置。在屏幕空白处滑动也可以调整控件位置。')
         .fontSize(12)
         .fontColor('#CBD5E1')
         .width('100%')
 
-      Text('选中控件后会自动开始监听输入；滑动控件还能拖动两端圆点拉伸和转向。')
+      Text('在屏幕任意位置双指捏合可调整控件大小。滑动控件还能拖动两端圆点拉伸和转向。')
+        .fontSize(12)
+        .fontColor('#CBD5E1')
+        .width('100%')
+
+      Text('选中控件后按下键盘或手柄按键即可进行按键绑定。绑定后如需重新绑定，请点击菜单中的清除绑定按钮。')
         .fontSize(12)
         .fontColor('#CBD5E1')
         .width('100%')
@@ -2887,42 +2956,10 @@ struct LayoutEditor {
         .fontColor('#FFFFFF')
         .width('100%')
 
-      Text(this.controlEditorMessage)
-        .fontSize(12)
-        .fontColor('#E2E8F0')
-        .width('100%')
-
-      Text(`类型：${this.getSelectedControlTypeLabel()} · 绑定：${this.getSelectedControlBindingText()}`)
-        .fontSize(12)
-        .fontColor('#CBD5E1')
-        .width('100%')
-
-      Text(this.bindingCaptureHint)
-        .fontSize(12)
-        .fontColor(this.isBindingCaptureListening() ? '#FDE68A' : '#CBD5E1')
-        .width('100%')
-
-      Text('缩放改为手势操作：单指拖动位置，双指捏合缩放；滑动控件拖动两端调整点即可拉伸并改变角度。')
-        .fontSize(12)
-        .fontColor('#94A3B8')
-        .width('100%')
-
       Row({ space: 12 }) {
-        Button('重新监听')
-          .layoutWeight(1)
-          .enabled(this.hasSelectedControl())
-          .backgroundColor('rgba(255, 255, 255, 0.14)')
-          .fontColor('#FFFFFF')
-          .onClick(() => {
-            if (this.selectedControlId.length > 0) {
-              this.armBindingCapture(this.selectedControlId);
-              this.updateControlEditorMessage();
-            }
-          })
-
         Button('清除绑定')
           .layoutWeight(1)
-          .enabled(this.hasSelectedControl())
+          .enabled(this.hasSelectedControlBinding())
           .backgroundColor('rgba(255, 255, 255, 0.14)')
           .fontColor('#FFFFFF')
           .onClick(() => {
@@ -2938,6 +2975,22 @@ struct LayoutEditor {
             this.removeSelectedControl();
           })
       }
+
+      Text(this.controlEditorMessage)
+        .fontSize(12)
+        .fontColor('#E2E8F0')
+        .width('100%')
+
+      Text(`类型：${this.getSelectedControlTypeLabel()} · 绑定：${this.getSelectedControlBindingText()}`)
+        .fontSize(12)
+        .fontColor('#CBD5E1')
+        .width('100%')
+
+      Text(this.bindingCaptureHint)
+        .fontSize(12)
+        .fontColor(this.isBindingCaptureListening() ? '#FDE68A' : '#CBD5E1')
+        .width('100%')
+
     }
     .width('100%')
   }
@@ -2945,24 +2998,26 @@ struct LayoutEditor {
   @Builder
   private buildFloatingMenuPanel() {
     Column({ space: 12 }) {
-      Row({ space: 8 }) {
-        Text('操作菜单')
-          .layoutWeight(1)
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-
-        Button('收起')
-          .backgroundColor('rgba(255, 255, 255, 0.12)')
-          .fontColor('#FFFFFF')
-          .onClick(() => {
-            this.menuExpanded = false;
-          })
-      }
-      .width('100%')
-
       Scroll() {
         Column({ space: 12 }) {
+          if (this.hasSelectedControl()) {
+            Column({ space: 10 }) {
+              this.buildSelectedControlPanel()
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor('rgba(255, 255, 255, 0.08)')
+            .borderRadius(20)
+          }
+
+          Column({ space: 10 }) {
+            this.buildControlLibraryPanel()
+          }
+          .width('100%')
+          .padding(14)
+          .backgroundColor('rgba(255, 255, 255, 0.08)')
+          .borderRadius(20)
+
           Column({ space: 8 }) {
             Text(this.currentLayoutName)
               .fontSize(16)
@@ -2970,7 +3025,7 @@ struct LayoutEditor {
               .fontColor('#FFFFFF')
               .width('100%')
 
-            Text(`${this.connectedDeviceName} · ${this.currentLayoutHasBackground ? '背景已导入' : '未导入背景'}`)
+            Text(`${this.connectedDeviceName} · ${this.currentLayoutHasBackground ? '已导入截图' : '未导入截图'}`)
               .fontSize(12)
               .fontColor('#CBD5E1')
               .width('100%')
@@ -3004,7 +3059,7 @@ struct LayoutEditor {
                 router.back();
               })
 
-            Button(this.currentLayoutHasBackground ? '更换背景图' : '导入背景图')
+            Button(this.currentLayoutHasBackground ? '更换被控游戏截图' : '导入被控游戏截图')
               .layoutWeight(1)
               .backgroundColor(PRIMARY_COLOR)
               .fontColor('#FFFFFF')
@@ -3014,44 +3069,14 @@ struct LayoutEditor {
           }
           .width('100%')
 
-          Row({ space: 8 }) {
-            Button(this.controlLibraryExpanded ? '收起控件类型' : '展开控件类型')
-              .layoutWeight(1)
-              .enabled(this.currentLayoutHasBackground)
-              .backgroundColor('rgba(255, 255, 255, 0.12)')
-              .fontColor('#FFFFFF')
-              .onClick(() => {
-                this.controlLibraryExpanded = !this.controlLibraryExpanded;
-              })
-
-            Button('清除背景图')
-              .layoutWeight(1)
-              .enabled(this.currentLayoutHasBackground)
-              .backgroundColor('rgba(127, 29, 29, 0.84)')
-              .fontColor('#FFFFFF')
-              .onClick(() => {
-                this.clearBackgroundImage();
-              })
-          }
-          .width('100%')
-
-          if (this.controlLibraryExpanded) {
-            Column({ space: 10 }) {
-              this.buildControlLibraryPanel()
-            }
+          Button('清除被控游戏截图')
             .width('100%')
-            .padding(14)
-            .backgroundColor('rgba(255, 255, 255, 0.08)')
-            .borderRadius(20)
-          }
-
-          Column({ space: 10 }) {
-            this.buildSelectedControlPanel()
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor('rgba(255, 255, 255, 0.08)')
-          .borderRadius(20)
+            .enabled(this.currentLayoutHasBackground)
+            .backgroundColor('rgba(127, 29, 29, 0.84)')
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.clearBackgroundImage();
+            })
         }
         .width('100%')
       }
@@ -3073,15 +3098,24 @@ struct LayoutEditor {
 
   @Builder
   private buildFloatingMenuButton() {
-    Column({ space: 2 }) {
-      Text('菜单')
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
+    Column({ space: 5 }) {
+      Row() {}
+        .width(22)
+        .height(2)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(99)
 
-      Text(this.menuExpanded ? '▲' : '▼')
-        .fontSize(10)
-        .fontColor('#CBD5E1')
+      Row() {}
+        .width(22)
+        .height(2)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(99)
+
+      Row() {}
+        .width(22)
+        .height(2)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(99)
     }
     .width(MENU_BUTTON_WIDTH)
     .height(MENU_BUTTON_HEIGHT)
