@@ -423,14 +423,14 @@ struct Index {
     Scroll() {
       Column({ space: 18 }) {
         Column({ space: 10 }) {
-          Text('选择要连接的蓝牙设备')
+          Text('选择要操控的蓝牙设备')
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor('#101828')
             .width('100%')
             .textAlign(TextAlign.Start)
 
-          Text('进入此页面后，应用会自动打开蓝牙、注册 HID，并开始发现附近设备。')
+          Text('本APP将模拟成蓝牙数位板与该设备建立连接。')
             .fontSize(15)
             .fontColor('#667085')
             .width('100%')
