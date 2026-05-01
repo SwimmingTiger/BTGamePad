@@ -286,10 +286,17 @@ export class AbsoluteTouchHidService {
     }
 
     try {
-      hilog.info(LOG_DOMAIN, LOG_TAG, 'connect requested to %{public}s', deviceId);
+      const addressType = this.getAddressType(deviceId);
+      hilog.info(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'connect requested to %{public}s addressType=%{public}d',
+        deviceId,
+        addressType
+      );
       this.hidProfile.connect({
         address: deviceId,
-        addressType: common.BluetoothAddressType.REAL,
+        addressType,
       });
       this.debugState.connected = true;
       this.debugState.lastConnectedDeviceId = deviceId;
@@ -560,6 +567,16 @@ export class AbsoluteTouchHidService {
       return connection.getRemoteDeviceName(deviceId, false);
     } catch (_) {
       return 'Unknown Device';
+    }
+  }
+
+  private getAddressType(deviceId: string): common.BluetoothAddressType {
+    try {
+      return access.isValidRandomDeviceId(deviceId)
+        ? common.BluetoothAddressType.VIRTUAL
+        : common.BluetoothAddressType.REAL;
+    } catch (_) {
+      return common.BluetoothAddressType.REAL;
     }
   }
 
