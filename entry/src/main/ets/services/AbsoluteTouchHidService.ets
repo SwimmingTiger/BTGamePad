@@ -6,8 +6,12 @@ import { access, common, connection, hid } from '@kit.ConnectivityKit';
 const ABSOLUTE_TOUCH_REPORT_ID = 1;
 const ABSOLUTE_AXIS_MAX = 32767;
 const BLUETOOTH_PERMISSION = 'ohos.permission.ACCESS_BLUETOOTH';
+const UNKNOWN_RSSI = -127;
+const CONNECT_VALIDATE_INTERVAL_MS = 600;
+const CONNECT_VALIDATE_RETRY_COUNT = 10;
 const LOG_DOMAIN = 0x0000;
 const LOG_TAG = 'AbsTouchHid';
+const BUILD_MARKER = 'BTGAMEPAD_BUILD_20260501_1432';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -109,6 +113,7 @@ export class HidDebugState {
   registered: boolean = false;
   registering: boolean = false;
   connected: boolean = false;
+  connecting: boolean = false;
   discovering: boolean = false;
   bluetoothEnabled: boolean = false;
   lastReportHex: string = '';
@@ -116,6 +121,8 @@ export class HidDebugState {
   lastError: string = '';
   lastEvent: string = 'idle';
   lastConnectedDeviceId: string = '';
+  connectingDeviceId: string = '';
+  pairingDeviceId: string = '';
   pendingPinCode: string = '';
 
   clone(): HidDebugState {
@@ -123,6 +130,7 @@ export class HidDebugState {
     copy.registered = this.registered;
     copy.registering = this.registering;
     copy.connected = this.connected;
+    copy.connecting = this.connecting;
     copy.discovering = this.discovering;
     copy.bluetoothEnabled = this.bluetoothEnabled;
     copy.lastReportHex = this.lastReportHex;
@@ -130,6 +138,8 @@ export class HidDebugState {
     copy.lastError = this.lastError;
     copy.lastEvent = this.lastEvent;
     copy.lastConnectedDeviceId = this.lastConnectedDeviceId;
+    copy.connectingDeviceId = this.connectingDeviceId;
+    copy.pairingDeviceId = this.pairingDeviceId;
     copy.pendingPinCode = this.pendingPinCode;
     return copy;
   }
@@ -165,14 +175,20 @@ class TouchMapping {
   }
 }
 
+type HidStateListener = (state: HidDebugState, devices: Array<RemoteDeviceItem>) => void;
+
 export class AbsoluteTouchHidService {
   private debugState: HidDebugState = new HidDebugState();
   private pendingRemoteAddress: string = '';
   private registerTimeoutId: number = -1;
+  private connectValidationTimeoutId: number = -1;
+  private pendingConnectDeviceId: string = '';
   private discoveredDevices: Map<string, RemoteDeviceItem> = new Map<string, RemoteDeviceItem>();
   private atManager = abilityAccessCtrl.createAtManager();
   private hidProfile: hid.HidDeviceProfile | null = null;
+  private stateListener: HidStateListener | null = null;
   private readonly discoveryListener = (results: Array<connection.DiscoveryResult>): void => {
+    this.debugState.discovering = true;
     results.forEach((result: connection.DiscoveryResult) => {
       const current = this.discoveredDevices.get(result.deviceId);
       const isSelected = current?.isSelected ?? this.pendingRemoteAddress === result.deviceId;
@@ -185,75 +201,184 @@ export class AbsoluteTouchHidService {
         isSelected
       );
       this.discoveredDevices.set(result.deviceId, item);
+      hilog.info(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'discovery update name=%{public}s deviceId=%{public}s rssi=%{public}d paired=%{public}d',
+        result.deviceName || 'Unknown Device',
+        result.deviceId,
+        result.rssi,
+        item.isPaired ? 1 : 0
+      );
     });
     this.debugState.lastEvent = `discovery update: ${results.length}`;
+    this.notifyStateChanged();
   };
   private readonly bondListener = (event: connection.BondStateParam): void => {
-    const item = this.discoveredDevices.get(event.deviceId) ?? new RemoteDeviceItem(event.deviceId, this.getSafeRemoteName(event.deviceId), '', 0, false, this.pendingRemoteAddress === event.deviceId);
-    item.bondState = this.toBondStateLabel(event.state);
-    item.isPaired = event.state === connection.BondState.BOND_STATE_BONDED;
+    const current = this.discoveredDevices.get(event.deviceId);
+    const item = new RemoteDeviceItem(
+      event.deviceId,
+      current?.name || this.getSafeRemoteName(event.deviceId),
+      this.toBondStateLabel(event.state),
+      current?.rssi ?? UNKNOWN_RSSI,
+      event.state === connection.BondState.BOND_STATE_BONDED,
+      current?.isSelected ?? this.pendingRemoteAddress === event.deviceId
+    );
     this.discoveredDevices.set(event.deviceId, item);
-    this.debugState.lastEvent = `bond state: ${event.deviceId} -> ${item.bondState}`;
+    if (event.state === connection.BondState.BOND_STATE_BONDING) {
+      this.debugState.pairingDeviceId = event.deviceId;
+      this.debugState.lastError = '';
+      this.debugState.lastEvent = `pairing: ${event.deviceId}`;
+    } else if (event.state === connection.BondState.BOND_STATE_BONDED) {
+      this.debugState.pairingDeviceId = '';
+      this.debugState.lastError = '';
+      this.debugState.lastEvent = `bonded: ${event.deviceId}`;
+      if (this.pendingConnectDeviceId === event.deviceId) {
+        this.connect(event.deviceId);
+      }
+    } else if (this.debugState.pairingDeviceId === event.deviceId) {
+      this.debugState.pairingDeviceId = '';
+      this.debugState.lastEvent = `bond state: ${event.deviceId} -> ${item.bondState}`;
+    }
+    this.notifyStateChanged();
   };
   private readonly pinListener = (event: connection.PinRequiredParam): void => {
     this.debugState.pendingPinCode = event.pinCode;
     this.debugState.lastEvent = `pin required: ${event.deviceId}`;
+    this.notifyStateChanged();
   };
 
   constructor() {
     this.debugState.descriptorHex = this.toHex(buildAbsoluteDigitizerDescriptor());
     this.debugState.lastEvent = 'absolute descriptor prepared';
     this.debugState.bluetoothEnabled = this.getBluetoothEnabledSafe();
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'service initialized build marker=%{public}s', BUILD_MARKER);
     this.attachBluetoothListeners();
     this.initializeHidProfile();
     this.refreshPairedDevices();
+    this.notifyStateChanged();
   }
 
   getState(): HidDebugState {
-    return this.debugState.clone();
+    return this.buildDerivedState();
   }
 
-  register(onStateChange?: (state: HidDebugState) => void): void {
+  setStateListener(listener: HidStateListener | null): void {
+    this.stateListener = listener;
+    this.notifyStateChanged();
+  }
+
+  async register(onStateChange?: (state: HidDebugState) => void): Promise<boolean> {
     if (this.hidProfile === null) {
       this.setError('HID device profile is unavailable on this device.');
       onStateChange?.(this.getState());
-      return;
+      return false;
     }
 
-    this.clearRegisterTimeout();
-    this.debugState.registering = true;
-    this.debugState.lastError = '';
-    this.debugState.lastEvent = 'registering hid';
-    onStateChange?.(this.getState());
+    return await new Promise<boolean>((resolve: (value: boolean) => void) => {
+      let settled = false;
+      const finish = (value: boolean): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        onStateChange?.(this.getState());
+        this.notifyStateChanged();
+        resolve(value);
+      };
 
-    this.registerTimeoutId = setTimeout(() => {
-      this.registerTimeoutId = -1;
-      if (this.debugState.registered || !this.debugState.registering) {
-        return;
-      }
-      this.debugState.registering = false;
-      this.setError('register hid failed: no callback or exception returned from the Bluetooth stack within 1500ms. Check hdc.log for system business errors such as 2903051.');
+      this.clearRegisterTimeout();
+      this.debugState.registering = true;
+      this.debugState.lastError = '';
+      this.debugState.lastEvent = 'registering hid';
       onStateChange?.(this.getState());
-    }, 1500);
+      this.notifyStateChanged();
 
-    try {
-      this.hidProfile.registerHidDevice(this.buildSdp(), this.buildQos(), this.buildQos(), (registered: boolean) => {
+      this.registerTimeoutId = setTimeout(() => {
+        this.registerTimeoutId = -1;
+        if (!this.debugState.registering) {
+          return;
+        }
+        this.debugState.registering = false;
+        if (this.debugState.registered) {
+          this.debugState.lastError = '';
+          this.debugState.lastEvent = 'hid register callback timeout, keeping accepted state';
+          hilog.warn(LOG_DOMAIN, LOG_TAG, 'register callback timeout, keeping accepted HID registration state');
+          finish(true);
+          return;
+        }
+        this.setError('register hid failed: no callback or exception returned from the Bluetooth stack within 1500ms. Check hdc.log for system business errors such as 2903051.');
+        finish(false);
+      }, 1500);
+
+      try {
+        this.hidProfile?.registerHidDevice(this.buildSdp(), this.buildQos(), this.buildQos(), (registered: boolean) => {
+          this.clearRegisterTimeout();
+          this.debugState.registering = false;
+          this.debugState.registered = registered;
+          if (registered) {
+            this.debugState.lastEvent = 'hid registered';
+            hilog.info(LOG_DOMAIN, LOG_TAG, 'register callback confirmed hid registered');
+          } else {
+            this.setError('register hid rejected: the Bluetooth stack returned false without a business error detail.');
+          }
+          finish(registered);
+        });
+        this.debugState.registered = true;
+        this.debugState.lastEvent = 'hid register request accepted';
+        hilog.info(LOG_DOMAIN, LOG_TAG, 'register request accepted by SDK, waiting for register callback');
+        onStateChange?.(this.getState());
+        this.notifyStateChanged();
+      } catch (error) {
         this.clearRegisterTimeout();
         this.debugState.registering = false;
-        this.debugState.registered = registered;
-        if (registered) {
-          this.debugState.lastEvent = 'hid registered';
-        } else {
-          this.setError('register hid rejected: the Bluetooth stack returned false without a business error detail.');
-        }
-        onStateChange?.(this.getState());
-      });
-    } catch (error) {
-      this.clearRegisterTimeout();
-      this.debugState.registering = false;
-      this.setError(formatBluetoothError('register hid', error as Object));
-      onStateChange?.(this.getState());
+        this.applyRegistrationStateFromError(error as Object);
+        this.setError(formatBluetoothError('register hid', error as Object));
+        finish(false);
+      }
+    });
+  }
+
+  async prepareForDeviceSelection(context: commonAbility.UIAbilityContext, onStateChange?: (state: HidDebugState) => void): Promise<boolean> {
+    const granted = await this.ensureBluetoothPermission(context);
+    onStateChange?.(this.getState());
+    this.notifyStateChanged();
+    if (!granted) {
+      return false;
     }
+
+    const prepared = await this.prepareDeviceSelectionAttempt(onStateChange);
+    if (prepared) {
+      return true;
+    }
+
+    const firstError = this.debugState.lastError || 'prepare device selection failed for an unknown reason.';
+    this.debugState.lastEvent = 'prepare failed, retrying without disabling bluetooth';
+    onStateChange?.(this.getState());
+    this.notifyStateChanged();
+
+    const retryReady = await this.recoverPreparationWithoutDisablingBluetooth(onStateChange);
+    if (!retryReady) {
+      if (this.debugState.lastError.length === 0) {
+        this.setError(`prepare device selection failed, and retry preparation also failed. Initial error: ${firstError}`);
+      } else {
+        this.setError(`prepare device selection failed. Initial error: ${firstError} Retry error: ${this.debugState.lastError}`);
+      }
+      return false;
+    }
+
+    const recovered = await this.prepareDeviceSelectionAttempt(onStateChange);
+    if (recovered) {
+      this.debugState.lastError = '';
+      this.debugState.lastEvent = 'device selection ready after retry';
+      onStateChange?.(this.getState());
+      this.notifyStateChanged();
+      return true;
+    }
+
+    const retryError = this.debugState.lastError || 'retry failed for an unknown reason.';
+    this.setError(`prepare device selection failed. Initial error: ${firstError} Retry error: ${retryError}`);
+    return false;
   }
 
   unregister(): void {
@@ -263,11 +388,14 @@ export class AbsoluteTouchHidService {
 
     try {
       this.clearRegisterTimeout();
+      this.cancelPendingConnectionState();
       this.debugState.registering = false;
       this.hidProfile.unregisterHidDevice();
       this.debugState.registered = false;
       this.debugState.connected = false;
+      this.debugState.lastConnectedDeviceId = '';
       this.debugState.lastEvent = 'hid unregistered';
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('unregister hid', error as Object));
     }
@@ -294,20 +422,30 @@ export class AbsoluteTouchHidService {
         deviceId,
         addressType
       );
+      this.clearConnectValidation();
+      this.pendingConnectDeviceId = deviceId;
+      this.debugState.connecting = true;
+      this.debugState.connectingDeviceId = deviceId;
+      this.debugState.connected = false;
+      this.debugState.lastConnectedDeviceId = '';
+      this.debugState.lastError = '';
       this.hidProfile.connect({
         address: deviceId,
         addressType,
       });
-      this.debugState.connected = true;
-      this.debugState.lastConnectedDeviceId = deviceId;
-      this.debugState.lastEvent = `hid connect requested: ${deviceId}`;
+      this.debugState.lastEvent = `connecting: ${deviceId}`;
+      this.scheduleConnectValidation(deviceId, CONNECT_VALIDATE_RETRY_COUNT);
+      this.notifyStateChanged();
     } catch (error) {
       hilog.error(LOG_DOMAIN, LOG_TAG, 'connect failed: %{public}s', JSON.stringify(error));
+      this.cancelPendingConnectionState();
+      this.applyRegistrationStateFromError(error as Object);
       this.setError(formatBluetoothError('connect hid host', error as Object));
     }
   }
 
   disconnect(): void {
+    this.cancelPendingConnectionState();
     if (this.hidProfile === null) {
       return;
     }
@@ -315,10 +453,29 @@ export class AbsoluteTouchHidService {
     try {
       this.hidProfile.disconnect();
       this.debugState.connected = false;
+      this.debugState.lastConnectedDeviceId = '';
+      this.debugState.lastError = '';
       this.debugState.lastEvent = 'hid disconnect requested';
+      this.notifyStateChanged();
     } catch (error) {
+      this.applyRegistrationStateFromError(error as Object);
       this.setError(formatBluetoothError('disconnect hid host', error as Object));
     }
+  }
+
+  cancelDeviceConnection(deviceId: string): void {
+    if (this.pendingConnectDeviceId === deviceId || this.debugState.connectingDeviceId === deviceId || this.debugState.pairingDeviceId === deviceId || this.debugState.lastConnectedDeviceId === deviceId) {
+      this.disconnect();
+      this.debugState.lastEvent = `connection flow canceled: ${deviceId}`;
+      this.notifyStateChanged();
+    }
+  }
+
+  consumeLastError(): string {
+    const message = this.debugState.lastError;
+    this.debugState.lastError = '';
+    this.notifyStateChanged();
+    return message;
   }
 
   sendTouch(active: boolean, x: number, y: number): void {
@@ -344,10 +501,14 @@ export class AbsoluteTouchHidService {
 
     try {
       this.hidProfile.sendReport(ABSOLUTE_TOUCH_REPORT_ID, report);
+      this.debugState.registered = true;
+      this.debugState.registering = false;
       hilog.info(LOG_DOMAIN, LOG_TAG, 'sendReport completed reportId=%{public}d', ABSOLUTE_TOUCH_REPORT_ID);
       this.debugState.lastEvent = active ? `touch report sent: ${x},${y}` : 'touch release report sent';
+      this.notifyStateChanged();
     } catch (error) {
       hilog.error(LOG_DOMAIN, LOG_TAG, 'sendReport failed: %{public}s', JSON.stringify(error));
+      this.applyRegistrationStateFromError(error as Object);
       this.setError(formatBluetoothError('send hid report', error as Object));
     }
   }
@@ -389,6 +550,28 @@ export class AbsoluteTouchHidService {
   private setError(message: string): void {
     this.debugState.lastError = message;
     this.debugState.lastEvent = 'error';
+    this.notifyStateChanged();
+  }
+
+  private applyRegistrationStateFromError(error: Object): void {
+    const code = Reflect.get(error, 'code') as number | undefined;
+    if (code === 2903053) {
+      this.debugState.registered = true;
+      this.debugState.registering = false;
+      return;
+    }
+
+    if (code === 2903052 || code === 2903051 || code === 2903050) {
+      this.debugState.registered = false;
+      this.debugState.registering = false;
+      if (code === 2903052) {
+        this.debugState.connected = false;
+        this.debugState.connecting = false;
+        this.debugState.connectingDeviceId = '';
+        this.debugState.lastConnectedDeviceId = '';
+      }
+      hilog.warn(LOG_DOMAIN, LOG_TAG, 'hid registration state cleared by business error=%{public}d', code);
+    }
   }
 
   private clearRegisterTimeout(): void {
@@ -403,9 +586,29 @@ export class AbsoluteTouchHidService {
   }
 
   getDevices(): Array<RemoteDeviceItem> {
-    return Array.from(this.discoveredDevices.values()).map((item: RemoteDeviceItem) => {
-      return new RemoteDeviceItem(item.deviceId, item.name, item.bondState, item.rssi, item.isPaired, item.isSelected);
-    });
+    const devices = Array.from(this.discoveredDevices.values())
+      .sort((left: RemoteDeviceItem, right: RemoteDeviceItem) => {
+        const leftRank = this.getSignalSortRank(left.rssi);
+        const rightRank = this.getSignalSortRank(right.rssi);
+
+        if (leftRank !== rightRank) {
+          return rightRank - leftRank;
+        }
+        if (leftRank > 0 && left.rssi !== right.rssi) {
+          return right.rssi - left.rssi;
+        }
+        return left.name.localeCompare(right.name);
+      })
+      .map((item: RemoteDeviceItem) => {
+        return new RemoteDeviceItem(item.deviceId, item.name, item.bondState, item.rssi, item.isPaired, item.isSelected);
+      });
+
+    const summary = devices
+      .slice(0, 8)
+      .map((item: RemoteDeviceItem) => `${item.name}|${item.deviceId}|rssi=${item.rssi}|rank=${this.getSignalSortRank(item.rssi)}`)
+      .join('; ');
+    hilog.info(LOG_DOMAIN, LOG_TAG, 'device order snapshot: %{public}s', summary || 'empty');
+    return devices;
   }
 
   async ensureBluetoothPermission(context: commonAbility.UIAbilityContext): Promise<boolean> {
@@ -420,6 +623,7 @@ export class AbsoluteTouchHidService {
       if (!granted) {
         this.setError('Bluetooth permission was denied by the user.');
       }
+      this.notifyStateChanged();
       return granted;
     } catch (error) {
       this.setError(`request bluetooth permission failed: ${JSON.stringify(error)}`);
@@ -437,16 +641,24 @@ export class AbsoluteTouchHidService {
       await access.enableBluetoothAsync();
       this.debugState.bluetoothEnabled = true;
       this.debugState.lastEvent = 'bluetooth enabled';
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('enable bluetooth', error as Object));
     }
   }
 
   startDiscovery(): void {
+    if (this.debugState.discovering) {
+      this.debugState.lastEvent = 'bluetooth discovery already active';
+      this.notifyStateChanged();
+      return;
+    }
+
     try {
       connection.startBluetoothDiscovery();
       this.debugState.discovering = true;
       this.debugState.lastEvent = 'bluetooth discovery started';
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('start bluetooth discovery', error as Object));
     }
@@ -457,36 +669,107 @@ export class AbsoluteTouchHidService {
       connection.stopBluetoothDiscovery();
       this.debugState.discovering = false;
       this.debugState.lastEvent = 'bluetooth discovery stopped';
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('stop bluetooth discovery', error as Object));
     }
   }
 
   async pairDevice(deviceId: string): Promise<void> {
+    this.debugState.lastError = '';
     try {
       await connection.pairDevice(deviceId);
       this.pendingRemoteAddress = deviceId;
+      this.debugState.pairingDeviceId = deviceId;
       this.debugState.lastEvent = `pair requested: ${deviceId}`;
       this.refreshPairedDevices();
+      this.notifyStateChanged();
     } catch (error) {
+      if (this.getSafePairState(deviceId) === connection.BondState.BOND_STATE_BONDING) {
+        this.debugState.pairingDeviceId = deviceId;
+        this.debugState.lastError = '';
+        this.debugState.lastEvent = `pairing: ${deviceId}`;
+        this.notifyStateChanged();
+        return;
+      }
       this.setError(formatBluetoothError('pair device', error as Object));
     }
   }
 
+  async connectWithPairing(deviceId: string): Promise<boolean> {
+    this.selectDevice(deviceId);
+    this.pendingConnectDeviceId = deviceId;
+    this.debugState.lastError = '';
+
+    const pairState = this.getSafePairState(deviceId);
+    if (pairState === connection.BondState.BOND_STATE_BONDING) {
+      this.debugState.pairingDeviceId = deviceId;
+      this.debugState.lastEvent = `pairing: ${deviceId}`;
+      this.notifyStateChanged();
+      return true;
+    }
+
+    if (pairState !== connection.BondState.BOND_STATE_BONDED) {
+      await this.pairDevice(deviceId);
+      const updatedPairState = this.getSafePairState(deviceId);
+      if (updatedPairState === connection.BondState.BOND_STATE_BONDING) {
+        this.debugState.pairingDeviceId = deviceId;
+        this.debugState.lastError = '';
+        this.debugState.lastEvent = `pairing: ${deviceId}`;
+        this.notifyStateChanged();
+        return true;
+      }
+      if (updatedPairState !== connection.BondState.BOND_STATE_BONDED) {
+        if (this.debugState.lastError.length === 0) {
+          this.setError(`connect failed: device is still not paired after pairing attempt: ${deviceId}`);
+        }
+        this.pendingConnectDeviceId = '';
+        return false;
+      }
+    }
+
+    this.connect(deviceId);
+    return true;
+  }
+
+  forgetPairedDevice(deviceId: string): boolean {
+    this.selectDevice(deviceId);
+    if (this.getSafePairState(deviceId) !== connection.BondState.BOND_STATE_BONDED) {
+      this.setError('forget paired device failed: this device is not paired.');
+      return false;
+    }
+
+    this.setError('forget paired device is not available: the HarmonyOS public Bluetooth SDK in this app does not expose an unpair API. Remove the device in system Bluetooth settings instead.');
+    return false;
+  }
+
   selectDevice(deviceId: string): void {
     this.pendingRemoteAddress = deviceId;
-    this.discoveredDevices.forEach((item: RemoteDeviceItem) => {
-      item.isSelected = item.deviceId === deviceId;
+    const entries = Array.from(this.discoveredDevices.entries());
+    entries.forEach((entry: [string, RemoteDeviceItem]) => {
+      const entryDeviceId = entry[0];
+      const item = entry[1];
+      this.discoveredDevices.set(entryDeviceId, new RemoteDeviceItem(
+        item.deviceId,
+        item.name,
+        item.bondState,
+        item.rssi,
+        item.isPaired,
+        item.deviceId === deviceId
+      ));
     });
     this.debugState.lastEvent = `device selected: ${deviceId}`;
+    this.notifyStateChanged();
   }
 
   destroy(): void {
     try {
+      this.clearConnectValidation();
       connection.off('discoveryResult', this.discoveryListener);
       connection.off('bondStateChange', this.bondListener);
       connection.off('pinRequired', this.pinListener);
       access.off('stateChange');
+      this.stateListener = null;
     } catch (_) {
     }
   }
@@ -494,6 +777,7 @@ export class AbsoluteTouchHidService {
   private initializeHidProfile(): void {
     try {
       this.hidProfile = hid.createHidDeviceProfile();
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('create hid profile', error as Object));
       this.hidProfile = null;
@@ -528,6 +812,7 @@ export class AbsoluteTouchHidService {
       connection.on('pinRequired', this.pinListener);
       access.on('stateChange', (state: access.BluetoothState) => {
         this.debugState.bluetoothEnabled = state === access.BluetoothState.STATE_ON;
+        this.notifyStateChanged();
       });
     } catch (error) {
       this.setError(formatBluetoothError('attach bluetooth listeners', error as Object));
@@ -543,15 +828,159 @@ export class AbsoluteTouchHidService {
           deviceId,
           existing?.name || this.getSafeRemoteName(deviceId),
           this.toBondStateLabel(connection.BondState.BOND_STATE_BONDED),
-          existing?.rssi || 0,
+          existing?.rssi ?? UNKNOWN_RSSI,
           true,
-          this.pendingRemoteAddress === deviceId
+          existing?.isSelected ?? this.pendingRemoteAddress === deviceId
         );
         this.discoveredDevices.set(deviceId, item);
       });
+      this.notifyStateChanged();
     } catch (error) {
       this.setError(formatBluetoothError('load paired devices', error as Object));
     }
+  }
+
+  private notifyStateChanged(): void {
+    this.stateListener?.(this.buildDerivedState(), this.getDevices());
+  }
+
+  private buildDerivedState(): HidDebugState {
+    const state = this.debugState.clone();
+    if (state.connected || state.connecting || state.lastConnectedDeviceId.length > 0) {
+      state.registered = true;
+      state.registering = false;
+    }
+
+    const hasLiveDiscoveryResult = Array.from(this.discoveredDevices.values())
+      .some((device: RemoteDeviceItem) => device.rssi < 0 && device.rssi > -100);
+    if (hasLiveDiscoveryResult) {
+      state.discovering = true;
+    }
+
+    return state;
+  }
+
+  private clearConnectValidation(): void {
+    if (this.connectValidationTimeoutId >= 0) {
+      clearTimeout(this.connectValidationTimeoutId);
+      this.connectValidationTimeoutId = -1;
+    }
+  }
+
+  private cancelPendingConnectionState(): void {
+    this.clearConnectValidation();
+    this.pendingConnectDeviceId = '';
+    this.debugState.connecting = false;
+    this.debugState.connectingDeviceId = '';
+    this.debugState.pairingDeviceId = '';
+  }
+
+  private scheduleConnectValidation(deviceId: string, remainingAttempts: number): void {
+    this.clearConnectValidation();
+    this.connectValidationTimeoutId = setTimeout(() => {
+      this.connectValidationTimeoutId = -1;
+      this.validateConnectedDevice(deviceId, remainingAttempts);
+    }, CONNECT_VALIDATE_INTERVAL_MS);
+  }
+
+  private validateConnectedDevice(deviceId: string, remainingAttempts: number): void {
+    if (this.pendingConnectDeviceId !== deviceId || this.hidProfile === null) {
+      return;
+    }
+
+    try {
+      this.hidProfile.sendReport(ABSOLUTE_TOUCH_REPORT_ID, this.buildAbsoluteTouchReport(false, 0, 0));
+      this.pendingConnectDeviceId = '';
+      this.debugState.registered = true;
+      this.debugState.registering = false;
+      this.debugState.connecting = false;
+      this.debugState.connectingDeviceId = '';
+      this.debugState.connected = true;
+      this.debugState.lastConnectedDeviceId = deviceId;
+      this.debugState.lastError = '';
+      this.debugState.lastEvent = `hid connected: ${deviceId}`;
+      this.notifyStateChanged();
+    } catch (error) {
+      const code = Reflect.get(error as Object, 'code') as number | undefined;
+      if (code === 2903053 && remainingAttempts > 1) {
+        this.debugState.registered = true;
+        this.debugState.registering = false;
+        this.debugState.connecting = true;
+        this.debugState.connectingDeviceId = deviceId;
+        this.debugState.lastEvent = `connecting: ${deviceId}`;
+        this.notifyStateChanged();
+        this.scheduleConnectValidation(deviceId, remainingAttempts - 1);
+        return;
+      }
+
+      this.cancelPendingConnectionState();
+      this.debugState.connected = false;
+      this.debugState.lastConnectedDeviceId = '';
+      this.applyRegistrationStateFromError(error as Object);
+      this.setError(formatBluetoothError('connect hid host', error as Object));
+    }
+  }
+
+  private async prepareDeviceSelectionAttempt(onStateChange?: (state: HidDebugState) => void): Promise<boolean> {
+    this.debugState.lastError = '';
+    this.debugState.lastEvent = 'preparing device selection';
+    this.debugState.bluetoothEnabled = this.getBluetoothEnabledSafe();
+    this.refreshPairedDevices();
+    onStateChange?.(this.getState());
+    this.notifyStateChanged();
+
+    await this.enableBluetoothIfNeeded();
+    onStateChange?.(this.getState());
+    if (!this.debugState.bluetoothEnabled) {
+      if (this.debugState.lastError.length === 0) {
+        this.setError('prepare device selection failed: bluetooth could not be enabled.');
+      }
+      return false;
+    }
+
+    if (!this.debugState.registered) {
+      const registered = await this.register(onStateChange);
+      if (!registered) {
+        return false;
+      }
+    }
+
+    this.startDiscovery();
+    onStateChange?.(this.getState());
+    this.refreshPairedDevices();
+    if (!this.debugState.discovering) {
+      if (this.debugState.lastError.length === 0) {
+        this.setError('prepare device selection failed: bluetooth discovery could not be started.');
+      }
+      return false;
+    }
+
+    this.debugState.lastError = '';
+    this.debugState.lastEvent = 'device selection ready';
+    onStateChange?.(this.getState());
+    this.notifyStateChanged();
+    return true;
+  }
+
+  private async recoverPreparationWithoutDisablingBluetooth(onStateChange?: (state: HidDebugState) => void): Promise<boolean> {
+    this.debugState.lastError = '';
+    this.debugState.lastEvent = 'retrying preparation without disabling bluetooth';
+    onStateChange?.(this.getState());
+    this.notifyStateChanged();
+
+    await this.enableBluetoothIfNeeded();
+    onStateChange?.(this.getState());
+    if (!this.debugState.bluetoothEnabled) {
+      if (this.debugState.lastError.length === 0) {
+        this.setError('retry failed: bluetooth could not be enabled.');
+      }
+      return false;
+    }
+
+    if (this.hidProfile === null) {
+      this.initializeHidProfile();
+    }
+    return this.hidProfile !== null;
   }
 
   private getBluetoothEnabledSafe(): boolean {
@@ -586,6 +1015,25 @@ export class AbsoluteTouchHidService {
     } catch (_) {
       return connection.BondState.BOND_STATE_INVALID;
     }
+  }
+
+  private getSignalSortRank(rssi: number): number {
+    if (rssi >= 0 || rssi <= -100) {
+      return 0;
+    }
+    if (rssi >= -55) {
+      return 4;
+    }
+    if (rssi >= -68) {
+      return 3;
+    }
+    if (rssi >= -78) {
+      return 2;
+    }
+    if (rssi >= -88) {
+      return 1;
+    }
+    return 0;
   }
 
   private toBondStateLabel(state: connection.BondState): string {
