@@ -56,6 +56,23 @@ const SUCCESS_COLOR = '#0D8A5F';
 const WARNING_COLOR = '#B06A00';
 const CARD_COLOR = '#F5F7FB';
 const KEY_EVENT_DOWN = 0;
+const RAW_KEYCODE_DPAD_UP = 2012;
+const RAW_KEYCODE_DPAD_DOWN = 2013;
+const RAW_KEYCODE_DPAD_LEFT = 2014;
+const RAW_KEYCODE_DPAD_RIGHT = 2015;
+const RAW_KEYCODE_BUTTON_A = 2301;
+const RAW_KEYCODE_BUTTON_B = 2302;
+const RAW_KEYCODE_BUTTON_X = 2304;
+const RAW_KEYCODE_BUTTON_Y = 2305;
+const RAW_KEYCODE_BUTTON_L1 = 2307;
+const RAW_KEYCODE_BUTTON_R1 = 2308;
+const RAW_KEYCODE_BUTTON_L2 = 2309;
+const RAW_KEYCODE_BUTTON_R2 = 2310;
+const RAW_KEYCODE_BUTTON_SELECT = 2311;
+const RAW_KEYCODE_BUTTON_START = 2312;
+const RAW_KEYCODE_BUTTON_MODE = 2313;
+const RAW_KEYCODE_BUTTON_L3 = 2314;
+const RAW_KEYCODE_BUTTON_R3 = 2315;
 const MOUSE_ACTION_MOVE = 1;
 const MOUSE_ACTION_BUTTON_DOWN = 2;
 const MOUSE_ACTION_AXIS_UPDATE = 5;
@@ -97,11 +114,17 @@ class CapturedBinding {
   code: string;
   label: string;
   sourceLabel: string;
+  rawSource: string;
+  rawCode: string;
+  rawName: string;
 
-  constructor(code: string, label: string, sourceLabel: string) {
+  constructor(code: string, label: string, sourceLabel: string, rawSource: string = '', rawCode: string = '', rawName: string = '') {
     this.code = code;
     this.label = label;
     this.sourceLabel = sourceLabel;
+    this.rawSource = rawSource;
+    this.rawCode = rawCode;
+    this.rawName = rawName;
   }
 }
 
@@ -109,6 +132,9 @@ class ControlPayload {
   rotation: number = 0;
   bindingLabel: string = '';
   bindingSource: string = '';
+  bindingRawSource: string = '';
+  bindingRawCode: string = '';
+  bindingRawName: string = '';
   directionalKeyCodes: string = '';
   directionalKeyLabels: string = '';
   swipeStartX: number = -1;
@@ -151,13 +177,13 @@ const CONTROL_LIBRARY_ITEMS: Array<ControlLibraryItem> = [
 ];
 
 const STICK_MOVE_BINDINGS: Array<BindingOption> = [
-  new BindingOption('左摇杆', 'axis-left-stick'),
-  new BindingOption('右摇杆', 'axis-right-stick'),
+  new BindingOption('左摇杆', `gamepad-axis:left-thumbstick`),
+  new BindingOption('右摇杆', `gamepad-axis:right-thumbstick`),
 ];
 
 const STICK_LOOK_BINDINGS: Array<BindingOption> = [
-  new BindingOption('右摇杆', 'axis-right-stick'),
-  new BindingOption('左摇杆', 'axis-left-stick'),
+  new BindingOption('右摇杆', `gamepad-axis:right-thumbstick`),
+  new BindingOption('左摇杆', `gamepad-axis:left-thumbstick`),
 ];
 
 const KEYBOARD_MOVE_BINDINGS: Array<BindingOption> = [
@@ -173,27 +199,29 @@ const KEYBOARD_LOOK_BINDINGS: Array<BindingOption> = [
 ];
 
 const BUTTON_BINDINGS: Array<BindingOption> = [
-  new BindingOption('A', 'button-a'),
-  new BindingOption('B', 'button-b'),
-  new BindingOption('X', 'button-x'),
-  new BindingOption('Y', 'button-y'),
-  new BindingOption('L1', 'button-l1'),
-  new BindingOption('R1', 'button-r1'),
-  new BindingOption('L2', 'button-l2'),
-  new BindingOption('R2', 'button-r2'),
-  new BindingOption('开始', 'button-start'),
-  new BindingOption('选择', 'button-select'),
-  new BindingOption('方向上', 'button-dpad-up'),
-  new BindingOption('方向下', 'button-dpad-down'),
-  new BindingOption('方向左', 'button-dpad-left'),
-  new BindingOption('方向右', 'button-dpad-right'),
+  new BindingOption('按钮A', `gamepad-button:${RAW_KEYCODE_BUTTON_A}`),
+  new BindingOption('按钮B', `gamepad-button:${RAW_KEYCODE_BUTTON_B}`),
+  new BindingOption('按钮X', `gamepad-button:${RAW_KEYCODE_BUTTON_X}`),
+  new BindingOption('按钮Y', `gamepad-button:${RAW_KEYCODE_BUTTON_Y}`),
+  new BindingOption('L1', `gamepad-button:${RAW_KEYCODE_BUTTON_L1}`),
+  new BindingOption('R1', `gamepad-button:${RAW_KEYCODE_BUTTON_R1}`),
+  new BindingOption('L2', `gamepad-button:${RAW_KEYCODE_BUTTON_L2}`),
+  new BindingOption('R2', `gamepad-button:${RAW_KEYCODE_BUTTON_R2}`),
+  new BindingOption('L3', `gamepad-button:${RAW_KEYCODE_BUTTON_L3}`),
+  new BindingOption('R3', `gamepad-button:${RAW_KEYCODE_BUTTON_R3}`),
+  new BindingOption('开始', `gamepad-button:${RAW_KEYCODE_BUTTON_START}`),
+  new BindingOption('选择', `gamepad-button:${RAW_KEYCODE_BUTTON_SELECT}`),
+  new BindingOption('方向上', `gamepad-button:${RAW_KEYCODE_DPAD_UP}`),
+  new BindingOption('方向下', `gamepad-button:${RAW_KEYCODE_DPAD_DOWN}`),
+  new BindingOption('方向左', `gamepad-button:${RAW_KEYCODE_DPAD_LEFT}`),
+  new BindingOption('方向右', `gamepad-button:${RAW_KEYCODE_DPAD_RIGHT}`),
 ];
 
 const SWIPE_BINDINGS: Array<BindingOption> = [
-  new BindingOption('左摇杆', 'axis-left-stick'),
-  new BindingOption('右摇杆', 'axis-right-stick'),
-  new BindingOption('左扳机', 'axis-left-trigger'),
-  new BindingOption('右扳机', 'axis-right-trigger'),
+  new BindingOption('左摇杆', `gamepad-axis:left-thumbstick`),
+  new BindingOption('右摇杆', `gamepad-axis:right-thumbstick`),
+  new BindingOption('左扳机', `gamepad-axis:left-trigger`),
+  new BindingOption('右扳机', `gamepad-axis:right-trigger`),
 ];
 
 const ALL_BINDING_OPTIONS: Array<BindingOption> = [
@@ -399,9 +427,9 @@ struct LayoutEditor {
   }
 
   private normalizeEditorControl(control: LayoutControlItem): LayoutControlItem {
-    const normalizedControl = control.clone();
+    let normalizedControl = control.clone();
     normalizedControl.inputKind = this.normalizeControlType(normalizedControl.inputKind, normalizedControl.inputCode);
-    normalizedControl.inputCode = this.normalizeBindingCode(normalizedControl.inputKind, normalizedControl.inputCode);
+    normalizedControl.inputCode = normalizedControl.inputCode.trim();
     normalizedControl.actionType = this.getActionTypeForControlType(normalizedControl.inputKind);
     if (normalizedControl.label.trim().length === 0) {
       normalizedControl.label = this.getControlTypeLabel(normalizedControl.inputKind);
@@ -469,6 +497,9 @@ struct LayoutEditor {
       payload.rotation = this.getPayloadNumberField(rawPayload, 'rotation', 0);
       payload.bindingLabel = this.getPayloadStringField(rawPayload, 'bindingLabel');
       payload.bindingSource = this.getPayloadStringField(rawPayload, 'bindingSource');
+      payload.bindingRawSource = this.getPayloadStringField(rawPayload, 'bindingRawSource');
+      payload.bindingRawCode = this.getPayloadStringField(rawPayload, 'bindingRawCode');
+      payload.bindingRawName = this.getPayloadStringField(rawPayload, 'bindingRawName');
       payload.directionalKeyCodes = this.getPayloadStringField(rawPayload, 'directionalKeyCodes');
       payload.directionalKeyLabels = this.getPayloadStringField(rawPayload, 'directionalKeyLabels');
       payload.swipeStartX = this.getPayloadNumberField(rawPayload, 'swipeStartX', -1);
@@ -718,7 +749,7 @@ struct LayoutEditor {
   }
 
   private hasControlBinding(control: LayoutControlItem): boolean {
-    return this.normalizeBindingCode(control.inputKind, control.inputCode).length > 0 || this.getStoredBindingLabel(control).length > 0;
+    return control.inputCode.trim().length > 0 || this.getStoredBindingLabel(control).length > 0;
   }
 
   private getUnboundBindingHint(control: LayoutControlItem): string {
@@ -825,12 +856,6 @@ struct LayoutEditor {
     this.bindingCaptureHint = `已记录 ${capturedLabels}，正在完成绑定。`;
   }
 
-  private looksLikeGamepadKeyName(rawName: string): boolean {
-    const normalizedName = rawName.trim().toUpperCase();
-    return normalizedName.includes('KEYCODE_BUTTON_') || normalizedName.includes('KEYCODE_GAMEPAD_') ||
-      normalizedName.startsWith('BUTTON_') || normalizedName.startsWith('GAMEPAD_');
-  }
-
   private stripBindingNamePrefixes(rawName: string): string {
     let normalizedName = rawName.trim().replace(/-/g, '_').toUpperCase();
     const prefixes = ['KEYCODE_BUTTON_', 'KEYCODE_GAMEPAD_', 'KEYCODE_', 'GAMEPAD_BUTTON_', 'GAMEPAD_', 'BUTTON_'];
@@ -848,36 +873,40 @@ struct LayoutEditor {
   }
 
   private toCompactBindingToken(token: string): string {
-    switch (token) {
-      case 'LEFT_SHOULDER':
+    const normalizedToken = token.trim().replace(/[_\s-]+/g, '').toUpperCase();
+    switch (normalizedToken) {
+      case 'LEFTSHOULDER':
       case 'L1':
         return 'L1';
-      case 'RIGHT_SHOULDER':
+      case 'RIGHTSHOULDER':
       case 'R1':
         return 'R1';
-      case 'LEFT_TRIGGER':
+      case 'LEFTTRIGGER':
       case 'L2':
         return 'L2';
-      case 'RIGHT_TRIGGER':
+      case 'RIGHTTRIGGER':
       case 'R2':
         return 'R2';
-      case 'LEFT_THUMBSTICK':
+      case 'LEFTSTICK':
+      case 'LEFTTHUMBSTICK':
       case 'THUMBL':
       case 'L3':
         return 'L3';
-      case 'RIGHT_THUMBSTICK':
+      case 'RIGHTSTICK':
+      case 'RIGHTTHUMBSTICK':
       case 'THUMBR':
       case 'R3':
         return 'R3';
-      case 'DPAD_UP':
+      case 'DPADUP':
         return 'UP';
-      case 'DPAD_DOWN':
+      case 'DPADDOWN':
         return 'DOWN';
-      case 'DPAD_LEFT':
+      case 'DPADLEFT':
         return 'LEFT';
-      case 'DPAD_RIGHT':
+      case 'DPADRIGHT':
         return 'RIGHT';
       case 'MENU':
+      case 'START':
         return 'START';
       case 'SELECT':
       case 'BACK':
@@ -923,46 +952,113 @@ struct LayoutEditor {
     return normalizedTokens.join(' ');
   }
 
-  private tryMapGamepadButtonBindingFromKeyName(rawName: string): string {
-    if (!this.looksLikeGamepadKeyName(rawName)) {
+  private buildRawBindingCode(rawSource: string, rawCode: string): string {
+    const normalizedSource = rawSource.trim();
+    const normalizedCode = rawCode.trim();
+    if (normalizedSource.length === 0 || normalizedCode.length === 0) {
       return '';
     }
+    return `${normalizedSource}:${normalizedCode}`;
+  }
 
-    switch (this.toCompactBindingToken(this.stripBindingNamePrefixes(rawName))) {
-      case 'A':
-        return 'button-a';
-      case 'B':
-        return 'button-b';
-      case 'X':
-        return 'button-x';
-      case 'Y':
-        return 'button-y';
-      case 'L1':
-        return 'button-l1';
-      case 'R1':
-        return 'button-r1';
-      case 'L2':
-        return 'button-l2';
-      case 'R2':
-        return 'button-r2';
-      case 'START':
-        return 'button-start';
-      case 'SELECT':
-        return 'button-select';
-      case 'UP':
-        return 'button-dpad-up';
-      case 'DOWN':
-        return 'button-dpad-down';
-      case 'LEFT':
-        return 'button-dpad-left';
-      case 'RIGHT':
-        return 'button-dpad-right';
+  private parseRawCodeNumber(rawCode: string): number {
+    const parsedCode = Number.parseInt(rawCode.trim(), 10);
+    return Number.isNaN(parsedCode) ? -1 : parsedCode;
+  }
+
+  private getGamepadButtonDisplayLabelByRawCode(rawCode: string): string {
+    switch (this.parseRawCodeNumber(rawCode)) {
+      case RAW_KEYCODE_BUTTON_A:
+        return '按钮A';
+      case RAW_KEYCODE_BUTTON_B:
+        return '按钮B';
+      case RAW_KEYCODE_BUTTON_X:
+        return '按钮X';
+      case RAW_KEYCODE_BUTTON_Y:
+        return '按钮Y';
+      case RAW_KEYCODE_BUTTON_L1:
+        return 'L1';
+      case RAW_KEYCODE_BUTTON_R1:
+        return 'R1';
+      case RAW_KEYCODE_BUTTON_L2:
+        return 'L2';
+      case RAW_KEYCODE_BUTTON_R2:
+        return 'R2';
+      case RAW_KEYCODE_BUTTON_SELECT:
+        return 'SELECT';
+      case RAW_KEYCODE_BUTTON_START:
+        return 'START';
+      case RAW_KEYCODE_BUTTON_MODE:
+        return 'MODE';
+      case RAW_KEYCODE_BUTTON_L3:
+        return 'L3';
+      case RAW_KEYCODE_BUTTON_R3:
+        return 'R3';
+      case RAW_KEYCODE_DPAD_UP:
+        return '方向上';
+      case RAW_KEYCODE_DPAD_DOWN:
+        return '方向下';
+      case RAW_KEYCODE_DPAD_LEFT:
+        return '方向左';
+      case RAW_KEYCODE_DPAD_RIGHT:
+        return '方向右';
       default:
         return '';
     }
   }
 
-  private normalizeControlType(inputKind: string, inputCode: string): string {
+  private getGamepadButtonDisplayLabel(rawCode: string, rawName: string): string {
+    const labelFromCode = this.getGamepadButtonDisplayLabelByRawCode(rawCode);
+    if (labelFromCode.length > 0) {
+      return labelFromCode;
+    }
+
+    const labelFromName = this.formatBindingDisplayName(rawName);
+    if (labelFromName.length > 0) {
+      return labelFromName;
+    }
+
+    const normalizedCode = rawCode.trim();
+    return normalizedCode.length > 0 ? `按钮 ${normalizedCode}` : '按钮';
+  }
+
+  private getKeyEventButtonDisplayLabel(keyCode: number, keyText: string): string {
+    const labelFromCode = this.getGamepadButtonDisplayLabelByRawCode(`${keyCode}`);
+    if (labelFromCode.length > 0) {
+      return labelFromCode;
+    }
+
+    const labelFromText = this.formatBindingDisplayName(keyText);
+    if (labelFromText.length > 0) {
+      return labelFromText;
+    }
+    return `按键 ${keyCode}`;
+  }
+
+  private getGamepadAxisDisplayLabel(rawCode: string): string {
+    switch (rawCode.trim().toLowerCase()) {
+      case 'left-thumbstick':
+        return '左摇杆';
+      case 'right-thumbstick':
+        return '右摇杆';
+      case 'left-trigger':
+        return '左扳机';
+      case 'right-trigger':
+        return '右扳机';
+      case 'left-stick:x':
+        return '左摇杆 X 轴';
+      case 'left-stick:y':
+        return '左摇杆 Y 轴';
+      case 'right-stick:x':
+        return '右摇杆 X 轴';
+      case 'right-stick:y':
+        return '右摇杆 Y 轴';
+      default:
+        return '';
+    }
+  }
+
+  private normalizeControlType(inputKind: string, _inputCode: string): string {
     switch (inputKind) {
       case CONTROL_TYPE_STICK_MOVE:
       case CONTROL_TYPE_STICK_LOOK:
@@ -971,47 +1067,8 @@ struct LayoutEditor {
       case CONTROL_TYPE_BUTTON:
       case CONTROL_TYPE_SWIPE:
         return inputKind;
-      case 'stick':
-        return inputCode === 'right-stick' ? CONTROL_TYPE_STICK_LOOK : CONTROL_TYPE_STICK_MOVE;
-      case 'dpad':
-        return CONTROL_TYPE_KEYBOARD_MOVE;
-      case 'button':
-        return CONTROL_TYPE_BUTTON;
       default:
         return CONTROL_TYPE_BUTTON;
-    }
-  }
-
-  private normalizeBindingCode(controlType: string, bindingCode: string): string {
-    switch (bindingCode) {
-      case 'left-stick':
-        return 'axis-left-stick';
-      case 'right-stick':
-        return 'axis-right-stick';
-      case 'gamepad-a':
-        return 'button-a';
-      case 'gamepad-b':
-        return 'button-b';
-      case 'gamepad-x':
-        return 'button-x';
-      case 'gamepad-y':
-        return 'button-y';
-      case 'gamepad-l1':
-        return 'button-l1';
-      case 'gamepad-r1':
-        return 'button-r1';
-      case 'gamepad-l2':
-        return controlType === CONTROL_TYPE_SWIPE ? 'axis-left-trigger' : 'button-l2';
-      case 'gamepad-r2':
-        return controlType === CONTROL_TYPE_SWIPE ? 'axis-right-trigger' : 'button-r2';
-      case 'gamepad-start':
-        return 'button-start';
-      case 'gamepad-select':
-        return 'button-select';
-      case 'gamepad-dpad':
-        return 'keys-arrows';
-      default:
-        return bindingCode;
     }
   }
 
@@ -1068,26 +1125,25 @@ struct LayoutEditor {
       }
     }
 
-    if (bindingCode === 'axis-left-stick-x') {
-      return '左摇杆 X 轴';
+    if (bindingCode.startsWith('gamepad-button:')) {
+      const rawCode = bindingCode.substring('gamepad-button:'.length);
+      const displayLabel = this.getGamepadButtonDisplayLabelByRawCode(rawCode);
+      return displayLabel.length > 0 ? displayLabel : `按钮 ${rawCode}`;
     }
-    if (bindingCode === 'axis-left-stick-y') {
-      return '左摇杆 Y 轴';
+    if (bindingCode.startsWith('gamepad-axis:')) {
+      const rawCode = bindingCode.substring('gamepad-axis:'.length);
+      const displayLabel = this.getGamepadAxisDisplayLabel(rawCode);
+      return displayLabel.length > 0 ? displayLabel : this.formatBindingDisplayName(rawCode);
     }
-    if (bindingCode === 'axis-right-stick-x') {
-      return '右摇杆 X 轴';
+    if (bindingCode.startsWith('key-event:')) {
+      const rawCode = bindingCode.substring('key-event:'.length);
+      const displayLabel = this.getGamepadButtonDisplayLabelByRawCode(rawCode);
+      return displayLabel.length > 0 ? displayLabel : `键盘 ${rawCode}`;
     }
-    if (bindingCode === 'axis-right-stick-y') {
-      return '右摇杆 Y 轴';
-    }
-    if (bindingCode.startsWith('key-')) {
-      return `键盘 ${bindingCode.substring(4)}`;
-    }
-    if (bindingCode.startsWith('mouse-button-')) {
-      return `鼠标${bindingCode.substring('mouse-button-'.length)}`;
-    }
-    if (bindingCode.startsWith('mouse-move-')) {
-      return bindingCode.endsWith('-x') ? '鼠标移动 X' : '鼠标移动 Y';
+    if (bindingCode.startsWith('mouse-button:')) {
+      const rawCode = bindingCode.substring('mouse-button:'.length);
+      const buttonCode = this.parseRawCodeNumber(rawCode);
+      return buttonCode >= 0 ? `鼠标${this.getMouseButtonLabel(buttonCode)}` : `鼠标${rawCode}`;
     }
     return this.formatBindingDisplayName(bindingCode);
   }
@@ -1097,7 +1153,7 @@ struct LayoutEditor {
     if (storedBindingLabel.length > 0) {
       return storedBindingLabel;
     }
-    return this.getBindingLabel(this.normalizeBindingCode(control.inputKind, control.inputCode));
+    return this.getBindingLabel(control.inputCode.trim());
   }
 
   private getControlBindingCaptionText(control: LayoutControlItem): string {
@@ -1115,7 +1171,8 @@ struct LayoutEditor {
     return this.getBindingOptionsForControlType(selectedControl.inputKind);
   }
 
-  private async bindSelectedControl(bindingCode: string, bindingLabel: string, sourceLabel: string): Promise<void> {
+  private async bindSelectedControl(bindingCode: string, bindingLabel: string, sourceLabel: string,
+    rawSource: string = '', rawCode: string = '', rawName: string = ''): Promise<void> {
     const selectedControl = this.getSelectedControl();
     const currentLayout = layoutRepository.getCurrentLayout();
     if (selectedControl === null || currentLayout === null) {
@@ -1132,6 +1189,9 @@ struct LayoutEditor {
     boundControl = this.withControlPayload(boundControl, (payload: ControlPayload) => {
       payload.bindingLabel = formattedBindingLabel;
       payload.bindingSource = formattedSourceLabel;
+      payload.bindingRawSource = rawSource.trim();
+      payload.bindingRawCode = rawCode.trim();
+      payload.bindingRawName = rawName.trim();
       payload.directionalKeyCodes = '';
       payload.directionalKeyLabels = '';
     });
@@ -1159,6 +1219,9 @@ struct LayoutEditor {
     boundControl = this.withControlPayload(boundControl, (payload: ControlPayload) => {
       payload.bindingLabel = bindingLabel;
       payload.bindingSource = '键盘';
+      payload.bindingRawSource = 'key-event';
+      payload.bindingRawCode = keyCodes.join(',');
+      payload.bindingRawName = keyLabels.join('|');
       payload.directionalKeyCodes = keyCodes.join(',');
       payload.directionalKeyLabels = keyLabels.join(',');
     });
@@ -1184,6 +1247,9 @@ struct LayoutEditor {
     clearedControl = this.withControlPayload(clearedControl, (payload: ControlPayload) => {
       payload.bindingLabel = '';
       payload.bindingSource = '';
+      payload.bindingRawSource = '';
+      payload.bindingRawCode = '';
+      payload.bindingRawName = '';
       payload.directionalKeyCodes = '';
       payload.directionalKeyLabels = '';
     });
@@ -1993,7 +2059,8 @@ struct LayoutEditor {
     for (const event of events) {
       const binding = this.tryBuildBindingFromNativeEvent(selectedControl, event);
       if (binding !== null) {
-        await this.bindSelectedControl(binding.code, binding.label, binding.sourceLabel);
+        await this.bindSelectedControl(binding.code, binding.label, binding.sourceLabel,
+          binding.rawSource, binding.rawCode, binding.rawName);
         return;
       }
     }
@@ -2020,19 +2087,28 @@ struct LayoutEditor {
       return null;
     }
 
+    const rawCodeValue = this.getNumberField(event, 'code');
+    if (rawCodeValue <= 0) {
+      return null;
+    }
+
+    const rawCode = `${rawCodeValue}`;
     const codeName = this.getStringField(event, 'codeName');
-    const bindingCode = this.mapGamepadButtonCode(codeName);
-    return new CapturedBinding(bindingCode, this.getBindingLabel(bindingCode), '手柄按钮');
+    const bindingCode = this.buildRawBindingCode('gamepad-button', rawCode);
+    if (bindingCode.length === 0) {
+      return null;
+    }
+    return new CapturedBinding(bindingCode, this.getGamepadButtonDisplayLabel(rawCode, codeName), '手柄按钮', 'gamepad-button', rawCode, codeName);
   }
 
   private tryBuildAxisBinding(control: LayoutControlItem, event: Object): CapturedBinding | null {
     const source = this.getStringField(event, 'source');
     if (control.inputKind === CONTROL_TYPE_STICK_MOVE || control.inputKind === CONTROL_TYPE_STICK_LOOK) {
       if (source === 'left-thumbstick') {
-        return new CapturedBinding('axis-left-stick', '左摇杆', '摇杆');
+        return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', source), '左摇杆', '摇杆', 'gamepad-axis', source, source);
       }
       if (source === 'right-thumbstick') {
-        return new CapturedBinding('axis-right-stick', '右摇杆', '摇杆');
+        return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', source), '右摇杆', '摇杆', 'gamepad-axis', source, source);
       }
       return null;
     }
@@ -2046,14 +2122,14 @@ struct LayoutEditor {
       if (value < BINDING_AXIS_THRESHOLD) {
         return null;
       }
-      return new CapturedBinding('axis-left-trigger', '左扳机', '线性扳机');
+      return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', source), '左扳机', '线性扳机', 'gamepad-axis', source, source);
     }
     if (source === 'right-trigger') {
       const value = Math.abs(this.getNumberField(event, 'gas'));
       if (value < BINDING_AXIS_THRESHOLD) {
         return null;
       }
-      return new CapturedBinding('axis-right-trigger', '右扳机', '线性扳机');
+      return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', source), '右扳机', '线性扳机', 'gamepad-axis', source, source);
     }
     if (source === 'left-thumbstick') {
       return this.buildStickAxisBinding('left-stick', this.getNumberField(event, 'x'), this.getNumberField(event, 'y'));
@@ -2076,63 +2152,18 @@ struct LayoutEditor {
     }
 
     if (Math.abs(horizontalValue) >= Math.abs(verticalValue)) {
+      const rawCode = `${stickName}:x`;
       if (stickName === 'left-stick') {
-        return new CapturedBinding('axis-left-stick-x', '左摇杆 X 轴', '摇杆轴');
+        return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', rawCode), '左摇杆 X 轴', '摇杆轴', 'gamepad-axis', rawCode, rawCode);
       }
-      return new CapturedBinding('axis-right-stick-x', '右摇杆 X 轴', '摇杆轴');
+      return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', rawCode), '右摇杆 X 轴', '摇杆轴', 'gamepad-axis', rawCode, rawCode);
     }
 
+    const rawCode = `${stickName}:y`;
     if (stickName === 'left-stick') {
-      return new CapturedBinding('axis-left-stick-y', '左摇杆 Y 轴', '摇杆轴');
+      return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', rawCode), '左摇杆 Y 轴', '摇杆轴', 'gamepad-axis', rawCode, rawCode);
     }
-    return new CapturedBinding('axis-right-stick-y', '右摇杆 Y 轴', '摇杆轴');
-  }
-
-  private mapGamepadButtonCode(codeName: string): string {
-    const normalizedCodeName = codeName.trim().toLowerCase().replace(/[_\s]+/g, '-');
-    if (normalizedCodeName.includes('button-a') || normalizedCodeName === 'a') {
-      return 'button-a';
-    }
-    if (normalizedCodeName.includes('button-b') || normalizedCodeName === 'b') {
-      return 'button-b';
-    }
-    if (normalizedCodeName.includes('button-x') || normalizedCodeName === 'x') {
-      return 'button-x';
-    }
-    if (normalizedCodeName.includes('button-y') || normalizedCodeName === 'y') {
-      return 'button-y';
-    }
-    if (normalizedCodeName.includes('left-shoulder') || normalizedCodeName.includes('leftshoulder') || normalizedCodeName === 'l1') {
-      return 'button-l1';
-    }
-    if (normalizedCodeName.includes('right-shoulder') || normalizedCodeName.includes('rightshoulder') || normalizedCodeName === 'r1') {
-      return 'button-r1';
-    }
-    if (normalizedCodeName.includes('left-trigger') || normalizedCodeName.includes('lefttrigger') || normalizedCodeName === 'l2') {
-      return 'button-l2';
-    }
-    if (normalizedCodeName.includes('right-trigger') || normalizedCodeName.includes('righttrigger') || normalizedCodeName === 'r2') {
-      return 'button-r2';
-    }
-    if (normalizedCodeName.includes('menu') || normalizedCodeName.includes('start')) {
-      return 'button-start';
-    }
-    if (normalizedCodeName.includes('select') || normalizedCodeName.includes('back')) {
-      return 'button-select';
-    }
-    if (normalizedCodeName.includes('dpad-left')) {
-      return 'button-dpad-left';
-    }
-    if (normalizedCodeName.includes('dpad-right')) {
-      return 'button-dpad-right';
-    }
-    if (normalizedCodeName.includes('dpad-up')) {
-      return 'button-dpad-up';
-    }
-    if (normalizedCodeName.includes('dpad-down')) {
-      return 'button-dpad-down';
-    }
-    return `button-${normalizedCodeName}`;
+    return new CapturedBinding(this.buildRawBindingCode('gamepad-axis', rawCode), '右摇杆 Y 轴', '摇杆轴', 'gamepad-axis', rawCode, rawCode);
   }
 
   private readKeyEventType(event: Object): number {
@@ -2193,15 +2224,22 @@ struct LayoutEditor {
     }
 
     if (selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
-      const mappedButtonCode = this.tryMapGamepadButtonBindingFromKeyName(keyText);
-      if (mappedButtonCode.length > 0) {
-        void this.bindSelectedControl(mappedButtonCode, this.getBindingLabel(mappedButtonCode), '按键');
-        return true;
+      const rawCode = `${keyCode}`;
+      const bindingCode = this.buildRawBindingCode('key-event', rawCode);
+      if (bindingCode.length === 0) {
+        return false;
       }
+      void this.bindSelectedControl(bindingCode, this.getKeyEventButtonDisplayLabel(keyCode, keyText), '按键', 'key-event', rawCode, keyText);
+      return true;
     }
 
+    const rawCode = `${keyCode}`;
+    const bindingCode = this.buildRawBindingCode('key-event', rawCode);
+    if (bindingCode.length === 0) {
+      return false;
+    }
     const bindingLabel = keyText.length > 0 ? this.formatBindingDisplayName(keyText) : `按键 ${keyCode}`;
-    void this.bindSelectedControl(`key-${keyCode}`, bindingLabel, '键盘');
+    void this.bindSelectedControl(bindingCode, bindingLabel, '键盘', 'key-event', rawCode, keyText);
     return true;
   }
 
@@ -2256,7 +2294,11 @@ struct LayoutEditor {
     if (action === MOUSE_ACTION_BUTTON_DOWN && selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
       const button = this.readMouseButton(event);
       if (button >= 0) {
-        void this.bindSelectedControl(`mouse-button-${button}`, `鼠标${this.getMouseButtonLabel(button)}`, '鼠标按钮');
+        const rawCode = `${button}`;
+        const bindingCode = this.buildRawBindingCode('mouse-button', rawCode);
+        if (bindingCode.length > 0) {
+          void this.bindSelectedControl(bindingCode, `鼠标${this.getMouseButtonLabel(button)}`, '鼠标按钮', 'mouse-button', rawCode);
+        }
       }
       return;
     }
