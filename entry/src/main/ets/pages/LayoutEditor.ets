@@ -474,6 +474,9 @@ struct LayoutEditor {
       await layoutRepository.initialize(this.hostContext);
       this.refreshLayoutSummary();
       this.tryAutoEnterExecutionMode();
+      if (!this.isExecutionMode()) {
+        this.selectFirstUnboundControl();
+      }
     } catch (_) {
       this.savedLayoutCount = 0;
       this.currentLayoutName = '布局仓库初始化失败';
@@ -2408,6 +2411,15 @@ struct LayoutEditor {
   private hasSelectedControlBinding(): boolean {
     const selectedControl = this.getSelectedControl();
     return selectedControl !== null && this.hasControlBinding(selectedControl);
+  }
+
+  private selectFirstUnboundControl(): void {
+    for (const control of this.layoutControls) {
+      if (!this.hasControlBinding(control)) {
+        this.selectControl(control.id);
+        return;
+      }
+    }
   }
 
   private selectControl(controlId: string): void {
