@@ -473,6 +473,7 @@ struct LayoutEditor {
     try {
       await layoutRepository.initialize(this.hostContext);
       this.refreshLayoutSummary();
+      this.tryAutoEnterExecutionMode();
     } catch (_) {
       this.savedLayoutCount = 0;
       this.currentLayoutName = '布局仓库初始化失败';
@@ -1758,6 +1759,24 @@ struct LayoutEditor {
     this.dispatchedExecutionYUnits = 0;
     this.heldDirectionalKeys.clear();
     this.hideExecutionTouchFeedback();
+  }
+
+  private tryAutoEnterExecutionMode(): void {
+    if (this.layoutControls.length === 0) {
+      return;
+    }
+    if (this.getBoundControlCount() === 0) {
+      return;
+    }
+    for (const control of this.layoutControls) {
+      if (!this.hasControlBinding(control)) {
+        return;
+      }
+    }
+    if (!hidService.getState().connected) {
+      return;
+    }
+    this.enterExecutionMode();
   }
 
   private enterExecutionMode(): void {
@@ -4195,7 +4214,7 @@ struct LayoutEditor {
       Scroll() {
         Column({ space: 12 }) {
           Row({ space: 8 }) {
-            Button(this.isExecutionMode() ? '返回编辑' : '保存并执行')
+            Button(this.isExecutionMode() ? '编辑布局' : '保存并执行')
               .layoutWeight(1)
               .enabled(this.isExecutionMode() || this.getBoundControlCount() > 0)
               .backgroundColor(this.isExecutionMode() ? $r('app.color.editor_button_bg') : SUCCESS_COLOR)
