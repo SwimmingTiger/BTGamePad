@@ -4194,6 +4194,30 @@ struct LayoutEditor {
     Column({ space: 12 }) {
       Scroll() {
         Column({ space: 12 }) {
+          Row({ space: 8 }) {
+            Button(this.isExecutionMode() ? '返回编辑' : '保存并执行')
+              .layoutWeight(1)
+              .enabled(this.isExecutionMode() || this.getBoundControlCount() > 0)
+              .backgroundColor(this.isExecutionMode() ? $r('app.color.editor_button_bg') : SUCCESS_COLOR)
+              .fontColor($r('app.color.editor_text_on_bg'))
+              .onClick(() => {
+                if (this.isExecutionMode()) {
+                  this.exitExecutionMode();
+                  return;
+                }
+                this.saveLayoutAndEnterExecutionMode();
+              })
+
+            Button('返回设备页')
+              .layoutWeight(1)
+              .backgroundColor($r('app.color.editor_button_bg'))
+              .fontColor($r('app.color.editor_text_on_bg'))
+              .onClick(() => {
+                router.back();
+              })
+          }
+          .width('100%')
+
           if (!this.isExecutionMode() && this.hasSelectedControl()) {
             Column({ space: 10 }) {
               this.buildSelectedControlPanel()
@@ -4262,50 +4286,27 @@ struct LayoutEditor {
           .backgroundColor($r('app.color.editor_panel_bg'))
           .borderRadius(20)
 
-          Row({ space: 8 }) {
-            Button(this.isExecutionMode() ? '返回编辑' : '保存并执行')
-              .layoutWeight(1)
-              .enabled(this.isExecutionMode() || this.getBoundControlCount() > 0)
-              .backgroundColor(this.isExecutionMode() ? $r('app.color.editor_button_bg') : SUCCESS_COLOR)
-              .fontColor($r('app.color.editor_text_on_bg'))
-              .onClick(() => {
-                if (this.isExecutionMode()) {
-                  this.exitExecutionMode();
-                  return;
-                }
-                this.saveLayoutAndEnterExecutionMode();
-              })
-
-            Button('返回设备页')
-              .layoutWeight(1)
-              .backgroundColor($r('app.color.editor_button_bg'))
-              .fontColor($r('app.color.editor_text_on_bg'))
-              .onClick(() => {
-                router.back();
-              })
-          }
-          .width('100%')
-
-          Row({ space: 8 }) {
-            Button(this.currentLayoutHasBackground ? '更换被控游戏截图' : '导入被控游戏截图')
-              .width('100%')
-              .enabled(!this.isExecutionMode())
-              .backgroundColor(PRIMARY_COLOR)
-              .fontColor($r('app.color.text_on_primary'))
-              .onClick(() => {
-                this.importBackgroundImage();
-              })
-          }
-          .width('100%')
-
-          Button('清除被控游戏截图')
+          if (!this.isExecutionMode()) {
+            Row({ space: 8 }) {
+              Button(this.currentLayoutHasBackground ? '更换被控游戏截图' : '导入被控游戏截图')
+                .width('100%')
+                .backgroundColor(PRIMARY_COLOR)
+                .fontColor($r('app.color.text_on_primary'))
+                .onClick(() => {
+                  this.importBackgroundImage();
+                })
+            }
             .width('100%')
-            .enabled(this.currentLayoutHasBackground && !this.isExecutionMode())
-            .backgroundColor($r('app.color.editor_clear_bg_btn'))
-            .fontColor($r('app.color.editor_text_on_bg'))
-            .onClick(() => {
-              this.clearBackgroundImage();
-            })
+
+            Button('清除被控游戏截图')
+              .width('100%')
+              .enabled(this.currentLayoutHasBackground)
+              .backgroundColor($r('app.color.editor_clear_bg_btn'))
+              .fontColor($r('app.color.editor_text_on_bg'))
+              .onClick(() => {
+                this.clearBackgroundImage();
+              })
+          }
         }
         .width('100%')
       }

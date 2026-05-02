@@ -508,7 +508,7 @@ struct Index {
           }
 
           if (this.debugState.connected) {
-            Button('前往键位布局准备')
+            Button('编辑键位布局')
               .width('100%')
               .enabled(!this.navigatingToLayoutEditor)
               .backgroundColor($r('app.color.dark_button_bg'))
