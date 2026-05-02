@@ -432,7 +432,7 @@ struct LayoutEditor {
     try {
       const currentWindow = await window.getLastWindow(this.hostContext);
       this.editorWindow = currentWindow;
-      await currentWindow.setPreferredOrientation(window.Orientation.LANDSCAPE);
+      this.updateOrientationFromBackground();
       await currentWindow.setWindowLayoutFullScreen(true);
       await currentWindow.setWindowSystemBarEnable([]);
       await currentWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
@@ -680,6 +680,7 @@ struct LayoutEditor {
   private resetBackgroundImageMetrics(): void {
     this.backgroundImageWidthPx = 0;
     this.backgroundImageHeightPx = 0;
+    this.updateOrientationFromBackground();
   }
 
   private getBackgroundWidthToHeightRatio(): number {
@@ -731,6 +732,22 @@ struct LayoutEditor {
     this.layoutControls = nextControls;
     this.currentLayoutControlCount = nextControls.length;
     this.updateControlEditorMessage();
+  }
+
+  private updateOrientationFromBackground(): void {
+    const currentWindow = this.editorWindow;
+    if (currentWindow === null) {
+      return;
+    }
+    if (!this.hasBackgroundImageMetrics()) {
+      void currentWindow.setPreferredOrientation(window.Orientation.PORTRAIT);
+      return;
+    }
+    if (this.backgroundImageWidthPx > this.backgroundImageHeightPx) {
+      void currentWindow.setPreferredOrientation(window.Orientation.LANDSCAPE);
+    } else {
+      void currentWindow.setPreferredOrientation(window.Orientation.PORTRAIT);
+    }
   }
 
   private hasBackgroundImageMetrics(): boolean {
@@ -879,6 +896,7 @@ struct LayoutEditor {
 
       this.backgroundImageWidthPx = Math.max(imageInfo.size.width, 0);
       this.backgroundImageHeightPx = Math.max(imageInfo.size.height, 0);
+      this.updateOrientationFromBackground();
       this.rebaseCurrentLayoutCoordinatesIfNeeded();
       this.refreshRoundControlGeometryForCurrentBackground();
       this.updateControlEditorMessage();
