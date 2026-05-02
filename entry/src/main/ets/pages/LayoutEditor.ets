@@ -76,9 +76,9 @@ const RAW_KEYCODE_BUTTON_START = 2312;
 const RAW_KEYCODE_BUTTON_MODE = 2313;
 const RAW_KEYCODE_BUTTON_L3 = 2314;
 const RAW_KEYCODE_BUTTON_R3 = 2315;
-const MOUSE_ACTION_MOVE = 1;
-const MOUSE_ACTION_BUTTON_DOWN = 2;
-const MOUSE_ACTION_AXIS_UPDATE = 5;
+const MOUSE_ACTION_PRESS = 1;
+const MOUSE_ACTION_RELEASE = 2;
+const MOUSE_ACTION_MOVE = 3;
 const BINDING_AXIS_THRESHOLD = 0.24;
 const EXECUTION_MODE_EDIT = 'edit';
 const EXECUTION_MODE_EXECUTE = 'execute';
@@ -3446,18 +3446,50 @@ struct LayoutEditor {
   private getMouseButtonLabel(button: number): string {
     switch (button) {
       case 0:
-        return '左键';
+        return '无按键';
       case 1:
-        return '中键';
+        return '左键';
       case 2:
         return '右键';
-      case 3:
-        return '侧键';
       case 4:
-        return '扩展键';
+        return '中键';
+      case 8:
+        return '后退键';
+      case 16:
+        return '前进键';
       default:
-        return `按钮 ${button}`;
+        return `按钮${button}`;
     }
+  }
+
+  private handleMouseExecutionEvent(event: Object): void {
+    if (!this.isExecutionMode()) {
+      return;
+    }
+
+    const action = this.readMouseAction(event);
+    if (action !== MOUSE_ACTION_PRESS && action !== MOUSE_ACTION_RELEASE) {
+      return;
+    }
+
+    const button = this.readMouseButton(event);
+    if (button < 0) {
+      return;
+    }
+
+    const bindingCode = this.buildRawBindingCode('mouse-button', `${button}`);
+    if (bindingCode.length === 0) {
+      return;
+    }
+
+    if (action === MOUSE_ACTION_PRESS) {
+      this.updateButtonExecutionTargets(bindingCode, true);
+      this.executionStatusText = `触发 ${this.getBindingLabel(bindingCode)}。`;
+    } else {
+      this.updateButtonExecutionTargets(bindingCode, false);
+    }
+
+    this.reconcileExecutionOutput();
   }
 
   private handleMouseBindingEvent(event: Object): void {
@@ -3471,16 +3503,21 @@ struct LayoutEditor {
     }
 
     const action = this.readMouseAction(event);
-    if (action === MOUSE_ACTION_BUTTON_DOWN && selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
-      const button = this.readMouseButton(event);
-      if (button >= 0) {
-        const rawCode = `${button}`;
-        const bindingCode = this.buildRawBindingCode('mouse-button', rawCode);
-        if (bindingCode.length > 0) {
-          void this.bindSelectedControl(bindingCode, `鼠标${this.getMouseButtonLabel(button)}`, '鼠标按钮', 'mouse-button', rawCode);
-        }
-      }
+    if (action !== MOUSE_ACTION_PRESS) {
       return;
+    }
+
+    const button = this.readMouseButton(event);
+    if (button <= 0) {
+      return;
+    }
+
+    if (selectedControl.inputKind === CONTROL_TYPE_BUTTON) {
+      const rawCode = `${button}`;
+      const bindingCode = this.buildRawBindingCode('mouse-button', rawCode);
+      if (bindingCode.length > 0) {
+        void this.bindSelectedControl(bindingCode, `鼠标${this.getMouseButtonLabel(button)}`, '鼠标按钮', 'mouse-button', rawCode);
+      }
     }
   }
 
@@ -4380,6 +4417,7 @@ struct LayoutEditor {
       return this.handleExecutionKeyEvent(event as Object) || this.handleKeyBindingEvent(event as Object);
     })
     .onMouse((event) => {
+      this.handleMouseExecutionEvent(event as Object);
       this.handleMouseBindingEvent(event as Object);
     })
   }

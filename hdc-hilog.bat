@@ -1,2 +1,2 @@
 hdc shell hilog -r
-hdc shell hilog -e btgamepad > hdc-hilog.log
+hdc hilog | findstr btgamepad > hdc-hilog.log
