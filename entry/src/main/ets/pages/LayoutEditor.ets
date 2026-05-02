@@ -82,6 +82,14 @@ const MOUSE_ACTION_MOVE = 3;
 const BINDING_AXIS_THRESHOLD = 0.24;
 const EXECUTION_MODE_EDIT = 'edit';
 const EXECUTION_MODE_EXECUTE = 'execute';
+const SIMULATE_MODE_DIGITIZER = 'digitizer';
+const SIMULATE_MODE_MOUSE = 'mouse';
+const MOUSE_SPEED_DEFAULT = 2;
+const MOUSE_SPEED_MIN = 1;
+const MOUSE_SPEED_MAX = 30;
+const MOUSE_ORIGIN_RESET_DELTA = -32768;
+const MOUSE_STICK_MOVE_STEP_MS = 16;
+const MOUSE_STICK_MOVE_STEP_FRACTION = 0.22;
 const EXECUTION_STICK_DEADZONE = 0.18;
 const EXECUTION_TOUCH_FEEDBACK_SIZE = 32;
 const EXECUTION_TOUCH_FEEDBACK_TIMEOUT_MS = 260;
@@ -397,6 +405,13 @@ struct LayoutEditor {
   @State executionTouchFeedbackDimmed: boolean = false;
   @State executionTouchFeedbackXUnits: number = 0;
   @State executionTouchFeedbackYUnits: number = 0;
+  @State simulateMode: string = SIMULATE_MODE_DIGITIZER;
+  @State mouseSpeedMultiplier: number = MOUSE_SPEED_DEFAULT;
+  private mouseEstimatedX: number = 0;
+  private mouseEstimatedY: number = 0;
+  private mouseOriginResetNeeded: boolean = true;
+  private mouseLastActiveControlId: string = '';
+  private mouseStickMoveIntervalId: number = -1;
 
   aboutToAppear(): void {
     this.menuExpanded = false;
@@ -420,6 +435,7 @@ struct LayoutEditor {
     nativeInputRuntimeService.setListener(null);
     nativeInputRuntimeService.stop();
     this.resetExecutionState(true);
+    this.clearMouseStickMoveInterval();
     this.draggingControlId = '';
     this.pinchingControlId = '';
     this.resizingSwipeControlId = '';
@@ -1765,11 +1781,21 @@ struct LayoutEditor {
   private resetExecutionState(releaseTouch: boolean): void {
     this.clearExecutionFeedbackTimeout();
     this.stopKeyboardAnimation();
+    this.clearMouseStickMoveInterval();
+    this.mouseOriginResetNeeded = true;
     if (releaseTouch && this.keyboardAnimActive && hidService.getState().connected) {
-      hidService.releaseTouch();
+      if (this.isSimulateMouseMode()) {
+        this.mouseClickUp();
+      } else {
+        hidService.releaseTouch();
+      }
     }
     if (releaseTouch && this.dispatchedExecutionActive && hidService.getState().connected && !this.keyboardAnimActive) {
-      hidService.releaseTouch();
+      if (this.isSimulateMouseMode()) {
+        this.mouseClickUp();
+      } else {
+        hidService.releaseTouch();
+      }
     }
     this.executionTouchSequence = 0;
     this.executionTargets = [];
@@ -2028,6 +2054,101 @@ struct LayoutEditor {
     }
   }
 
+  private resetMouseToOrigin(): void {
+    if (!this.mouseOriginResetNeeded) {
+      return;
+    }
+
+    if (!hidService.getState().connected) {
+      return;
+    }
+
+    hidService.sendMouseMove(MOUSE_ORIGIN_RESET_DELTA, MOUSE_ORIGIN_RESET_DELTA);
+    this.mouseEstimatedX = 0;
+    this.mouseEstimatedY = 0;
+    this.mouseOriginResetNeeded = false;
+  }
+
+  private moveMouseToCanvasPosition(xUnits: number, yUnits: number): void {
+    this.resetMouseToOrigin();
+
+    const targetX = Math.round(xUnits * this.mouseSpeedMultiplier);
+    const targetY = Math.round(yUnits * this.mouseSpeedMultiplier);
+    const deltaX = targetX - this.mouseEstimatedX;
+    const deltaY = targetY - this.mouseEstimatedY;
+
+    if (deltaX !== 0 || deltaY !== 0) {
+      hidService.sendMouseMove(deltaX, deltaY);
+      this.mouseEstimatedX = targetX;
+      this.mouseEstimatedY = targetY;
+    }
+  }
+
+  private mouseClickDown(): void {
+    hidService.sendMouseButton(true, 0, 0);
+  }
+
+  private mouseClickUp(): void {
+    hidService.releaseMouseButton();
+  }
+
+  private clearMouseStickMoveInterval(): void {
+    if (this.mouseStickMoveIntervalId >= 0) {
+      clearInterval(this.mouseStickMoveIntervalId);
+      this.mouseStickMoveIntervalId = -1;
+    }
+  }
+
+  private startMouseStickMove(controlId: string, centerXUnits: number, centerYUnits: number, radiusUnits: number): void {
+    this.clearMouseStickMoveInterval();
+    this.resetMouseToOrigin();
+
+    const centerScreenX = Math.round(centerXUnits * this.mouseSpeedMultiplier);
+    const centerScreenY = Math.round(centerYUnits * this.mouseSpeedMultiplier);
+
+    this.mouseStickMoveIntervalId = setInterval(() => {
+      if (!this.isExecutionMode() || this.simulateMode !== SIMULATE_MODE_MOUSE) {
+        this.clearMouseStickMoveInterval();
+        return;
+      }
+
+      const target = this.getTopExecutionTarget();
+      if (target === null || target.controlId !== controlId) {
+        this.clearMouseStickMoveInterval();
+        return;
+      }
+
+      const targetScreenX = Math.round(target.xUnits * this.mouseSpeedMultiplier);
+      const targetScreenY = Math.round(target.yUnits * this.mouseSpeedMultiplier);
+
+      const dx = targetScreenX - this.mouseEstimatedX;
+      const dy = targetScreenY - this.mouseEstimatedY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < 1) {
+        return;
+      }
+
+      const stepX = Math.round(dx * MOUSE_STICK_MOVE_STEP_FRACTION);
+      const stepY = Math.round(dy * MOUSE_STICK_MOVE_STEP_FRACTION);
+
+      if (stepX !== 0 || stepY !== 0) {
+        hidService.sendMouseMove(stepX, stepY);
+        this.mouseEstimatedX += stepX;
+        this.mouseEstimatedY += stepY;
+      }
+    }, MOUSE_STICK_MOVE_STEP_MS);
+  }
+
+  private endMouseStickMove(): void {
+    this.clearMouseStickMoveInterval();
+    this.mouseOriginResetNeeded = true;
+  }
+
+  private isSimulateMouseMode(): boolean {
+    return this.simulateMode === SIMULATE_MODE_MOUSE;
+  }
+
   private reconcileExecutionOutput(): void {
     if (this.keyboardAnimActive) {
       return;
@@ -2040,21 +2161,22 @@ struct LayoutEditor {
       }
 
       if (hidService.getState().connected) {
-        hidService.releaseTouch();
+        this.releaseExecutionAction();
       }
       this.updateExecutionTouchFeedback(false, this.dispatchedExecutionXUnits, this.dispatchedExecutionYUnits);
       this.executionActiveControlId = '';
       this.dispatchedExecutionActive = false;
       this.dispatchedExecutionControlId = '';
       this.executionStatusText = '等待输入。';
+      this.endMouseStickMove();
       return;
     }
 
     if (hidService.getState().connected) {
       if (this.dispatchedExecutionActive && this.dispatchedExecutionControlId !== nextTarget.controlId) {
-        hidService.releaseTouch();
+        this.releaseExecutionAction();
       }
-      hidService.sendTouch(true, this.toHidAxisValue(nextTarget.xUnits), this.toHidAxisValue(nextTarget.yUnits));
+      this.sendExecutionAction(nextTarget);
     }
 
     this.executionActiveControlId = nextTarget.controlId;
@@ -2063,6 +2185,54 @@ struct LayoutEditor {
     this.dispatchedExecutionXUnits = nextTarget.xUnits;
     this.dispatchedExecutionYUnits = nextTarget.yUnits;
     this.updateExecutionTouchFeedback(true, nextTarget.xUnits, nextTarget.yUnits);
+  }
+
+  private releaseExecutionAction(): void {
+    if (this.isSimulateMouseMode()) {
+      this.mouseClickUp();
+      this.endMouseStickMove();
+    } else {
+      hidService.releaseTouch();
+    }
+  }
+
+  private sendExecutionAction(target: ExecutionTouchTarget): void {
+    if (this.isSimulateMouseMode()) {
+      if (this.mouseLastActiveControlId !== target.controlId) {
+        this.endMouseStickMove();
+        this.mouseLastActiveControlId = target.controlId;
+      }
+
+      const control = this.findLocalControl(target.controlId);
+      if (control !== null) {
+        if (control.inputKind === CONTROL_TYPE_BUTTON) {
+          this.moveMouseToCanvasPosition(target.xUnits, target.yUnits);
+          this.mouseClickDown();
+        } else if (this.isMoveControlType(control.inputKind) || this.isLookControlType(control.inputKind)) {
+          if (this.mouseStickMoveIntervalId < 0) {
+            const centerX = this.getControlCenterXUnits(control);
+            const centerY = this.getControlCenterYUnits(control);
+            const radiusUnits = Math.max(control.width, CONTROL_DEFAULT_SIZE);
+            this.startMouseStickMove(target.controlId, centerX, centerY, radiusUnits);
+          }
+        } else {
+          this.moveMouseToCanvasPosition(target.xUnits, target.yUnits);
+          this.mouseClickDown();
+        }
+      }
+    } else {
+      const hidX = this.toHidAxisValue(target.xUnits);
+      const hidY = this.toHidAxisValue(target.yUnits);
+      hidService.sendTouch(true, hidX, hidY);
+    }
+  }
+
+  private getControlCenterXUnits(control: LayoutControlItem): number {
+    return clampEditorValue(Math.round(control.x), 0, CONTROL_CANVAS_UNITS);
+  }
+
+  private getControlCenterYUnits(control: LayoutControlItem): number {
+    return clampEditorValue(Math.round(control.y), 0, CONTROL_CANVAS_UNITS);
   }
 
   private handleExecutionEvents(events: Array<Object>): void {
@@ -2288,7 +2458,12 @@ struct LayoutEditor {
 
     if (!hasMoveActive && !hasLookActive) {
       if (this.keyboardAnimActive && hidService.getState().connected) {
-        hidService.releaseTouch();
+        if (this.isSimulateMouseMode()) {
+          this.mouseClickUp();
+          this.mouseOriginResetNeeded = true;
+        } else {
+          hidService.releaseTouch();
+        }
       }
       this.stopKeyboardAnimation();
       this.hideExecutionTouchFeedback();
@@ -2409,9 +2584,21 @@ struct LayoutEditor {
     }
 
     if (active) {
-      hidService.sendTouch(true, this.toHidAxisValue(this.keyboardAnimCurrentX), this.toHidAxisValue(this.keyboardAnimCurrentY));
+      if (this.isSimulateMouseMode()) {
+        this.moveMouseToCanvasPosition(this.keyboardAnimCurrentX, this.keyboardAnimCurrentY);
+        this.mouseClickDown();
+      } else {
+        const hidX = this.toHidAxisValue(this.keyboardAnimCurrentX);
+        const hidY = this.toHidAxisValue(this.keyboardAnimCurrentY);
+        hidService.sendTouch(true, hidX, hidY);
+      }
     } else {
-      hidService.releaseTouch();
+      if (this.isSimulateMouseMode()) {
+        this.mouseClickUp();
+        this.mouseOriginResetNeeded = true;
+      } else {
+        hidService.releaseTouch();
+      }
     }
 
     this.dispatchedExecutionActive = active;
@@ -4266,6 +4453,76 @@ struct LayoutEditor {
               })
           }
           .width('100%')
+
+          if (this.isExecutionMode()) {
+            Column({ space: 10 }) {
+              Text('模拟模式')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.editor_text_on_bg'))
+                .width('100%')
+
+              Row({ space: 12 }) {
+                Row({ space: 6 }) {
+                  Radio({ value: SIMULATE_MODE_DIGITIZER, group: 'simulateMode' })
+                    .checked(this.simulateMode === SIMULATE_MODE_DIGITIZER)
+                    .radioStyle({ checkedBackgroundColor: PRIMARY_COLOR })
+                    .onChange((isChecked: boolean) => {
+                      if (isChecked) {
+                        this.simulateMode = SIMULATE_MODE_DIGITIZER;
+                      }
+                    })
+
+                  Text('模拟数位板')
+                    .fontSize(13)
+                    .fontColor($r('app.color.editor_text_on_bg'))
+                }
+
+                Row({ space: 6 }) {
+                  Radio({ value: SIMULATE_MODE_MOUSE, group: 'simulateMode' })
+                    .checked(this.simulateMode === SIMULATE_MODE_MOUSE)
+                    .radioStyle({ checkedBackgroundColor: PRIMARY_COLOR })
+                    .onChange((isChecked: boolean) => {
+                      if (isChecked) {
+                        this.simulateMode = SIMULATE_MODE_MOUSE;
+                      }
+                    })
+
+                  Text('模拟鼠标')
+                    .fontSize(13)
+                    .fontColor($r('app.color.editor_text_on_bg'))
+                }
+              }
+              .width('100%')
+
+              if (this.simulateMode === SIMULATE_MODE_MOUSE) {
+                Text(`鼠标速度: ${this.mouseSpeedMultiplier}x`)
+                  .fontSize(12)
+                  .fontColor($r('app.color.editor_text_secondary'))
+                  .width('100%')
+                  .margin({ top: 4 })
+
+                Slider({
+                  style: SliderStyle.OutSet,
+                  value: this.mouseSpeedMultiplier,
+                  min: MOUSE_SPEED_MIN,
+                  max: MOUSE_SPEED_MAX,
+                  step: 1,
+                })
+                  .width('100%')
+                  .blockColor(PRIMARY_COLOR)
+                  .trackColor('#C8CDD5')
+                  .selectedColor(PRIMARY_COLOR)
+                  .onChange((value: number) => {
+                    this.mouseSpeedMultiplier = Math.round(value);
+                  })
+              }
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor($r('app.color.editor_panel_bg'))
+            .borderRadius(20)
+          }
 
           if (!this.isExecutionMode() && this.hasSelectedControl()) {
             Column({ space: 10 }) {

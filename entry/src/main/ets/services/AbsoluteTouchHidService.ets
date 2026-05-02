@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { access, common, connection, hid } from '@kit.ConnectivityKit';
 
 const ABSOLUTE_TOUCH_REPORT_ID = 1;
+const MOUSE_REPORT_ID = 2;
 const ABSOLUTE_AXIS_MAX = 32767;
 const BLUETOOTH_PERMISSION = 'ohos.permission.ACCESS_BLUETOOTH';
 const UNKNOWN_RSSI = -127;
@@ -24,6 +25,12 @@ function toUnsignedByte(value: number): number {
 function toLittleEndianWord(value: number): number[] {
   const normalized = clamp(Math.round(value), 0, ABSOLUTE_AXIS_MAX);
   return [toUnsignedByte(normalized), toUnsignedByte(normalized >> 8)];
+}
+
+function toSignedLittleEndianWord(value: number): number[] {
+  const normalized = clamp(Math.round(value), -ABSOLUTE_AXIS_MAX, ABSOLUTE_AXIS_MAX);
+  const unsigned = normalized & 0xFFFF;
+  return [toUnsignedByte(unsigned), toUnsignedByte(unsigned >> 8)];
 }
 
 function buildAbsoluteDigitizerDescriptor(): Uint8Array {
@@ -54,6 +61,47 @@ function buildAbsoluteDigitizerDescriptor(): Uint8Array {
     0xC0,
     0xC0,
   ]);
+}
+
+function buildMouseReportDescriptor(): Uint8Array {
+  return new Uint8Array([
+    0x05, 0x01,
+    0x09, 0x02,
+    0xA1, 0x01,
+    0x85, MOUSE_REPORT_ID,
+    0x09, 0x01,
+    0xA1, 0x00,
+    0x05, 0x09,
+    0x19, 0x01,
+    0x29, 0x03,
+    0x15, 0x00,
+    0x25, 0x01,
+    0x75, 0x01,
+    0x95, 0x03,
+    0x81, 0x02,
+    0x95, 0x01,
+    0x75, 0x05,
+    0x81, 0x03,
+    0x05, 0x01,
+    0x09, 0x30,
+    0x09, 0x31,
+    0x16, 0x01, 0x80,
+    0x26, 0xFF, 0x7F,
+    0x75, 0x10,
+    0x95, 0x02,
+    0x81, 0x06,
+    0xC0,
+    0xC0,
+  ]);
+}
+
+function buildCombinedDescriptor(): Uint8Array {
+  const digitizer = buildAbsoluteDigitizerDescriptor();
+  const mouse = buildMouseReportDescriptor();
+  const combined = new Uint8Array(digitizer.length + mouse.length);
+  combined.set(digitizer, 0);
+  combined.set(mouse, digitizer.length);
+  return combined;
 }
 
 function formatBluetoothError(action: string, error: Object): string {
@@ -249,8 +297,8 @@ export class AbsoluteTouchHidService {
   };
 
   constructor() {
-    this.debugState.descriptorHex = this.toHex(buildAbsoluteDigitizerDescriptor());
-    this.debugState.lastEvent = 'absolute descriptor prepared';
+    this.debugState.descriptorHex = this.toHex(buildCombinedDescriptor());
+    this.debugState.lastEvent = 'combined descriptor prepared';
     this.debugState.bluetoothEnabled = this.getBluetoothEnabledSafe();
     hilog.info(LOG_DOMAIN, LOG_TAG, 'service initialized build marker=%{public}s', BUILD_MARKER);
     this.attachBluetoothListeners();
@@ -517,6 +565,71 @@ export class AbsoluteTouchHidService {
     this.sendTouch(false, 0, 0);
   }
 
+  sendMouseButton(buttonPressed: boolean, x: number, y: number): void {
+    const report = this.buildMouseButtonReport(buttonPressed, x, y);
+    this.debugState.lastReportHex = this.toHex(report);
+    hilog.info(
+      LOG_DOMAIN,
+      LOG_TAG,
+      'sendMouseButton pressed=%{public}d x=%{public}d y=%{public}d report=%{public}s',
+      buttonPressed ? 1 : 0,
+      x,
+      y,
+      this.debugState.lastReportHex
+    );
+    if (this.hidProfile === null) {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'sendMouseButton aborted: hidProfile is null');
+      return;
+    }
+
+    try {
+      this.hidProfile.sendReport(MOUSE_REPORT_ID, report);
+      this.debugState.registered = true;
+      this.debugState.registering = false;
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'sendMouseReport completed reportId=%{public}d', MOUSE_REPORT_ID);
+      this.debugState.lastEvent = buttonPressed ? `mouse button down: ${x},${y}` : 'mouse button up';
+      this.notifyStateChanged();
+    } catch (error) {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'sendMouseReport failed: %{public}s', JSON.stringify(error));
+      this.applyRegistrationStateFromError(error as Object);
+      this.setError(formatBluetoothError('send mouse hid report', error as Object));
+    }
+  }
+
+  releaseMouseButton(): void {
+    this.sendMouseButton(false, 0, 0);
+  }
+
+  sendMouseMove(dx: number, dy: number): void {
+    const report = this.buildMouseMoveReport(dx, dy);
+    this.debugState.lastReportHex = this.toHex(report);
+    hilog.info(
+      LOG_DOMAIN,
+      LOG_TAG,
+      'sendMouseMove dx=%{public}d dy=%{public}d report=%{public}s',
+      dx,
+      dy,
+      this.debugState.lastReportHex
+    );
+    if (this.hidProfile === null) {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'sendMouseMove aborted: hidProfile is null');
+      return;
+    }
+
+    try {
+      this.hidProfile.sendReport(MOUSE_REPORT_ID, report);
+      this.debugState.registered = true;
+      this.debugState.registering = false;
+      hilog.info(LOG_DOMAIN, LOG_TAG, 'sendMouseMove completed reportId=%{public}d', MOUSE_REPORT_ID);
+      this.debugState.lastEvent = `mouse move: ${dx},${dy}`;
+      this.notifyStateChanged();
+    } catch (error) {
+      hilog.error(LOG_DOMAIN, LOG_TAG, 'sendMouseMove failed: %{public}s', JSON.stringify(error));
+      this.applyRegistrationStateFromError(error as Object);
+      this.setError(formatBluetoothError('send mouse move report', error as Object));
+    }
+  }
+
   mapStickToTouch(input: NormalizedStickInput, calibration: CalibrationConfig): TouchMapping {
     const magnitude = Math.sqrt(input.x * input.x + input.y * input.y);
     if (magnitude < calibration.deadzone) {
@@ -539,6 +652,19 @@ export class AbsoluteTouchHidService {
     const xBytes = toLittleEndianWord(x);
     const yBytes = toLittleEndianWord(y);
     return new Uint8Array([flags, xBytes[0], xBytes[1], yBytes[0], yBytes[1]]);
+  }
+
+  private buildMouseButtonReport(buttonPressed: boolean, x: number, y: number): Uint8Array {
+    const buttons = buttonPressed ? 0x01 : 0x00;
+    const xBytes = toLittleEndianWord(x);
+    const yBytes = toLittleEndianWord(y);
+    return new Uint8Array([buttons, xBytes[0], xBytes[1], yBytes[0], yBytes[1]]);
+  }
+
+  private buildMouseMoveReport(dx: number, dy: number): Uint8Array {
+    const xBytes = toSignedLittleEndianWord(dx);
+    const yBytes = toSignedLittleEndianWord(dy);
+    return new Uint8Array([0x00, xBytes[0], xBytes[1], yBytes[0], yBytes[1]]);
   }
 
   private toHex(report: Uint8Array): string {
@@ -786,11 +912,11 @@ export class AbsoluteTouchHidService {
 
   private buildSdp(): hid.HidDeviceSdp {
     return {
-      name: 'BtGamePad Touch',
-      description: 'Absolute touch digitizer for remote joystick',
-      provider: 'BtGamePad',
-      subclass: hid.Subclass.SUBCLASS_DIGITIZER_TABLET,
-      descriptors: buildAbsoluteDigitizerDescriptor(),
+      name: 'Bluetooth Gaming Mouse',
+      description: 'Bluetooth Gaming Mouse',
+      provider: 'BluetoothGamingMouse',
+      subclass: hid.Subclass.SUBCLASS_COMBO,
+      descriptors: buildCombinedDescriptor(),
     };
   }
 
