@@ -169,6 +169,16 @@ class EditorPoint {
   }
 }
 
+class DirectionVector {
+  horizontal: number;
+  vertical: number;
+
+  constructor(horizontal: number, vertical: number) {
+    this.horizontal = horizontal;
+    this.vertical = vertical;
+  }
+}
+
 class SwipeHandlePositions {
   start: EditorPoint;
   end: EditorPoint;
@@ -339,6 +349,19 @@ struct LayoutEditor {
   private dispatchedExecutionControlId: string = '';
   private dispatchedExecutionXUnits: number = 0;
   private dispatchedExecutionYUnits: number = 0;
+  private heldDirectionalKeys: Map<number, boolean> = new Map<number, boolean>();
+  private keyboardAnimTargetX: number = 0;
+  private keyboardAnimTargetY: number = 0;
+  private keyboardAnimCurrentX: number = 0;
+  private keyboardAnimCurrentY: number = 0;
+  private keyboardAnimActive: boolean = false;
+  private keyboardAnimControlId: string = '';
+  private keyboardAnimMoveControlId: string = '';
+  private keyboardAnimLookControlId: string = '';
+  private keyboardAnimIntervalId: number = -1;
+  private readonly KEYBOARD_ANIM_SPEED: number = 0.28;
+  private readonly KEYBOARD_ANIM_INTERVAL_MS: number = 16;
+  private readonly KEYBOARD_ANIM_SNAP_THRESHOLD: number = 3;
   @State connectedDeviceName: string = '未连接设备';
   @State connectedDeviceId: string = '';
   @State nativeInputState: NativeInputRuntimeState = nativeInputRuntimeService.getState();
@@ -1719,7 +1742,11 @@ struct LayoutEditor {
 
   private resetExecutionState(releaseTouch: boolean): void {
     this.clearExecutionFeedbackTimeout();
-    if (releaseTouch && this.dispatchedExecutionActive && hidService.getState().connected) {
+    this.stopKeyboardAnimation();
+    if (releaseTouch && this.keyboardAnimActive && hidService.getState().connected) {
+      hidService.releaseTouch();
+    }
+    if (releaseTouch && this.dispatchedExecutionActive && hidService.getState().connected && !this.keyboardAnimActive) {
       hidService.releaseTouch();
     }
     this.executionTouchSequence = 0;
@@ -1729,6 +1756,7 @@ struct LayoutEditor {
     this.dispatchedExecutionControlId = '';
     this.dispatchedExecutionXUnits = 0;
     this.dispatchedExecutionYUnits = 0;
+    this.heldDirectionalKeys.clear();
     this.hideExecutionTouchFeedback();
   }
 
@@ -1961,6 +1989,10 @@ struct LayoutEditor {
   }
 
   private reconcileExecutionOutput(): void {
+    if (this.keyboardAnimActive) {
+      return;
+    }
+
     const nextTarget = this.getTopExecutionTarget();
     if (nextTarget === null) {
       if (!this.dispatchedExecutionActive) {
@@ -2022,26 +2054,332 @@ struct LayoutEditor {
       return false;
     }
 
+    const eventType = this.readKeyEventType(event);
+    const pressed = eventType === KEY_EVENT_DOWN;
+    const released = eventType === KEY_EVENT_UP;
+    if (!pressed && !released) {
+      return false;
+    }
+
+    const handledByDirectional = this.handleKeyboardDirectionalKey(keyCode, pressed);
+    if (handledByDirectional) {
+      return true;
+    }
+
     const bindingCode = this.buildRawBindingCode('key-event', `${keyCode}`);
     if (bindingCode.length === 0) {
       return false;
     }
 
-    const eventType = this.readKeyEventType(event);
-    if (eventType === KEY_EVENT_DOWN) {
+    if (pressed) {
       this.updateButtonExecutionTargets(bindingCode, true);
       this.executionStatusText = `触发 ${this.getBindingLabel(bindingCode)}。`;
       this.reconcileExecutionOutput();
       return true;
     }
 
-    if (eventType === KEY_EVENT_UP) {
+    if (released) {
       this.updateButtonExecutionTargets(bindingCode, false);
       this.reconcileExecutionOutput();
       return true;
     }
 
     return false;
+  }
+
+  private resolvePredefinedDirectionalKeyCodes(bindingCode: string): Array<number> | null {
+    switch (bindingCode) {
+      case 'keys-wasd':
+        return [2041, 2044, 2042, 2043];
+      case 'keys-arrows':
+      case 'keys-arrows-look':
+        return [2012, 2014, 2013, 2015];
+      case 'keys-numpad-move':
+      case 'keys-numpad-look':
+        return [2086, 2082, 2080, 2084];
+      case 'keys-ijkl':
+        return [2032, 2035, 2036, 2037];
+      default:
+        break;
+    }
+    return null;
+  }
+
+  private parseDirectionalKeyCodes(control: LayoutControlItem): Array<number> {
+    const payload = this.parseControlPayload(control);
+    const keyCodesText = payload.directionalKeyCodes.trim();
+    if (keyCodesText.length > 0) {
+      const keyCodes: Array<number> = [];
+      const parts = keyCodesText.split(',');
+      for (const part of parts) {
+        const parsedCode = Number.parseInt(part.trim(), 10);
+        if (!Number.isNaN(parsedCode) && parsedCode > 0) {
+          keyCodes.push(parsedCode);
+        }
+      }
+      if (keyCodes.length === DIRECTIONAL_BINDING_PART_COUNT) {
+        return keyCodes;
+      }
+    }
+
+    const predefinedKeyCodes = this.resolvePredefinedDirectionalKeyCodes(control.inputCode.trim());
+    if (predefinedKeyCodes !== null) {
+      return predefinedKeyCodes;
+    }
+
+    return [];
+  }
+
+  private getKeyboardDirectionVector(control: LayoutControlItem): DirectionVector | null {
+    const directionalKeyCodes = this.parseDirectionalKeyCodes(control);
+    if (directionalKeyCodes.length !== DIRECTIONAL_BINDING_PART_COUNT) {
+      return null;
+    }
+
+    const upCode = directionalKeyCodes[0];
+    const leftCode = directionalKeyCodes[1];
+    const downCode = directionalKeyCodes[2];
+    const rightCode = directionalKeyCodes[3];
+
+    const upPressed = this.heldDirectionalKeys.has(upCode);
+    const downPressed = this.heldDirectionalKeys.has(downCode);
+    const leftPressed = this.heldDirectionalKeys.has(leftCode);
+    const rightPressed = this.heldDirectionalKeys.has(rightCode);
+
+    const horizontalValue = (rightPressed ? 1 : 0) - (leftPressed ? 1 : 0);
+    const verticalValue = (downPressed ? 1 : 0) - (upPressed ? 1 : 0);
+
+    const magnitude = Math.sqrt(horizontalValue * horizontalValue + verticalValue * verticalValue);
+    if (magnitude < 0.01) {
+      return null;
+    }
+
+    return new DirectionVector(horizontalValue / magnitude, verticalValue / magnitude);
+  }
+
+  private findFirstBoundDirectionalControl(kind: string): LayoutControlItem | null {
+    for (const control of this.layoutControls) {
+      if (control.inputKind !== kind) {
+        continue;
+      }
+      if (!this.hasControlBinding(control)) {
+        continue;
+      }
+      const directionalKeyCodes = this.parseDirectionalKeyCodes(control);
+      if (directionalKeyCodes.length === DIRECTIONAL_BINDING_PART_COUNT) {
+        return control;
+      }
+    }
+    return null;
+  }
+
+  private computeKeyboardDesiredPosition(control: LayoutControlItem): ExecutionTouchTarget | null {
+    const directionVector = this.getKeyboardDirectionVector(control);
+    if (directionVector === null) {
+      return null;
+    }
+
+    return this.buildStickExecutionTarget(control, directionVector.horizontal, directionVector.vertical);
+  }
+
+  private getKeyboardCenterPosition(control: LayoutControlItem): ExecutionTouchTarget {
+    const centerXUnits = this.isRoundControlType(control.inputKind) ? this.getRoundControlCenterXUnits(control) : this.getControlCenterX(control);
+    const centerYUnits = this.isRoundControlType(control.inputKind) ? this.getRoundControlCenterYUnits(control) : this.getControlCenterY(control);
+    return new ExecutionTouchTarget(control.id, Math.round(centerXUnits), Math.round(centerYUnits), 0);
+  }
+
+  private isKeyboardDirectionalKeyForAnyControl(keyCode: number): boolean {
+    for (const control of this.layoutControls) {
+      if (!this.isDirectionalKeyboardControlType(control.inputKind)) {
+        continue;
+      }
+      if (!this.hasControlBinding(control)) {
+        continue;
+      }
+      const directionalKeyCodes = this.parseDirectionalKeyCodes(control);
+      if (directionalKeyCodes.includes(keyCode)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private handleKeyboardDirectionalKey(keyCode: number, pressed: boolean): boolean {
+    if (!this.isKeyboardDirectionalKeyForAnyControl(keyCode)) {
+      return false;
+    }
+
+    if (pressed) {
+      this.heldDirectionalKeys.set(keyCode, true);
+    } else {
+      this.heldDirectionalKeys.delete(keyCode);
+    }
+
+    this.syncKeyboardAnimationTarget();
+
+    if (pressed) {
+      const moveControl = this.findFirstBoundDirectionalControl(CONTROL_TYPE_KEYBOARD_MOVE);
+      const lookControl = this.findFirstBoundDirectionalControl(CONTROL_TYPE_KEYBOARD_LOOK);
+      if (moveControl !== null && lookControl !== null) {
+        this.executionStatusText = '正在执行键盘移动 + 键盘视角（八向）。';
+      } else if (moveControl !== null) {
+        this.executionStatusText = '正在执行键盘移动（八向）。';
+      } else if (lookControl !== null) {
+        this.executionStatusText = '正在执行键盘视角（八向）。';
+      }
+    }
+
+    if (!pressed && this.heldDirectionalKeys.size === 0) {
+      this.executionStatusText = '等待输入。';
+    }
+
+    return true;
+  }
+
+  private syncKeyboardAnimationTarget(): void {
+    const moveControl = this.findFirstBoundDirectionalControl(CONTROL_TYPE_KEYBOARD_MOVE);
+    const lookControl = this.findFirstBoundDirectionalControl(CONTROL_TYPE_KEYBOARD_LOOK);
+
+    const moveTarget = moveControl !== null ? this.computeKeyboardDesiredPosition(moveControl) : null;
+    const lookTarget = lookControl !== null ? this.computeKeyboardDesiredPosition(lookControl) : null;
+
+    const hasMoveActive = moveTarget !== null;
+    const hasLookActive = lookTarget !== null;
+
+    if (!hasMoveActive && !hasLookActive) {
+      if (this.keyboardAnimActive && hidService.getState().connected) {
+        hidService.releaseTouch();
+      }
+      this.stopKeyboardAnimation();
+      this.hideExecutionTouchFeedback();
+      this.executionStatusText = '等待输入。';
+      return;
+    }
+
+    let primaryTarget: ExecutionTouchTarget | null = null;
+    let primaryControlId: string = '';
+    let primaryMoveControlId: string = '';
+    let primaryLookControlId: string = '';
+
+    if (hasMoveActive && moveTarget !== null) {
+      primaryTarget = moveTarget;
+      primaryControlId = moveTarget.controlId;
+      primaryMoveControlId = moveTarget.controlId;
+    }
+    if (hasLookActive && lookTarget !== null) {
+      primaryTarget = lookTarget;
+      primaryControlId = lookTarget.controlId;
+      primaryLookControlId = lookTarget.controlId;
+    }
+
+    if (primaryTarget === null) {
+      return;
+    }
+
+    const wasAnimating = this.keyboardAnimActive;
+    this.keyboardAnimTargetX = primaryTarget.xUnits;
+    this.keyboardAnimTargetY = primaryTarget.yUnits;
+    this.keyboardAnimControlId = primaryControlId;
+    this.keyboardAnimMoveControlId = primaryMoveControlId;
+    this.keyboardAnimLookControlId = primaryLookControlId;
+
+    if (!wasAnimating) {
+      const primaryControl = this.findLocalControl(primaryControlId);
+      if (primaryControl !== null) {
+        const centerPos = this.getKeyboardCenterPosition(primaryControl);
+        this.keyboardAnimCurrentX = centerPos.xUnits;
+        this.keyboardAnimCurrentY = centerPos.yUnits;
+      } else {
+        this.keyboardAnimCurrentX = primaryTarget.xUnits;
+        this.keyboardAnimCurrentY = primaryTarget.yUnits;
+      }
+    }
+
+    this.startKeyboardAnimation();
+  }
+
+  private startKeyboardAnimation(): void {
+    if (this.keyboardAnimIntervalId >= 0) {
+      return;
+    }
+
+    this.keyboardAnimActive = true;
+    this.removeAllKeyboardExecutionTargets();
+    this.keyboardAnimIntervalId = setInterval(() => {
+      this.tickKeyboardAnimation();
+    }, this.KEYBOARD_ANIM_INTERVAL_MS);
+  }
+
+  private stopKeyboardAnimation(): void {
+    if (this.keyboardAnimIntervalId < 0) {
+      return;
+    }
+
+    clearInterval(this.keyboardAnimIntervalId);
+    this.keyboardAnimIntervalId = -1;
+    this.keyboardAnimActive = false;
+    this.keyboardAnimControlId = '';
+    this.keyboardAnimMoveControlId = '';
+    this.keyboardAnimLookControlId = '';
+  }
+
+  private removeAllKeyboardExecutionTargets(): void {
+    this.executionTargets = this.executionTargets
+      .filter((target: ExecutionTouchTarget) => {
+        const control = this.findLocalControl(target.controlId);
+        if (control === null) {
+          return false;
+        }
+        return !this.isDirectionalKeyboardControlType(control.inputKind);
+      })
+      .map((target: ExecutionTouchTarget) => target.clone());
+  }
+
+  private tickKeyboardAnimation(): void {
+    if (!this.keyboardAnimActive) {
+      this.stopKeyboardAnimation();
+      return;
+    }
+
+    if (!hidService.getState().connected) {
+      return;
+    }
+
+    const dx = this.keyboardAnimTargetX - this.keyboardAnimCurrentX;
+    const dy = this.keyboardAnimTargetY - this.keyboardAnimCurrentY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance <= this.KEYBOARD_ANIM_SNAP_THRESHOLD) {
+      this.keyboardAnimCurrentX = this.keyboardAnimTargetX;
+      this.keyboardAnimCurrentY = this.keyboardAnimTargetY;
+      this.sendKeyboardAnimTouch(true);
+      return;
+    }
+
+    const step = distance * this.KEYBOARD_ANIM_SPEED;
+    const ratio = Math.min(step / distance, 1);
+    this.keyboardAnimCurrentX += dx * ratio;
+    this.keyboardAnimCurrentY += dy * ratio;
+    this.sendKeyboardAnimTouch(true);
+  }
+
+  private sendKeyboardAnimTouch(active: boolean): void {
+    if (!hidService.getState().connected) {
+      return;
+    }
+
+    if (active) {
+      hidService.sendTouch(true, this.toHidAxisValue(this.keyboardAnimCurrentX), this.toHidAxisValue(this.keyboardAnimCurrentY));
+    } else {
+      hidService.releaseTouch();
+    }
+
+    this.dispatchedExecutionActive = active;
+    this.dispatchedExecutionControlId = this.keyboardAnimControlId;
+    this.dispatchedExecutionXUnits = this.keyboardAnimCurrentX;
+    this.dispatchedExecutionYUnits = this.keyboardAnimCurrentY;
+    this.executionActiveControlId = this.keyboardAnimControlId;
+    this.updateExecutionTouchFeedback(active, this.keyboardAnimCurrentX, this.keyboardAnimCurrentY);
   }
 
   private hasSelectedControl(): boolean {
