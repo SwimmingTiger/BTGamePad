@@ -288,11 +288,11 @@ struct LayoutSummaryRow {
       Text(this.label)
         .layoutWeight(1)
         .fontSize(14)
-        .fontColor('#1E2430')
+        .fontColor($r('app.color.text_secondary'))
 
       Text(this.value)
         .fontSize(13)
-        .fontColor(this.highlight ? PRIMARY_COLOR : '#667085')
+        .fontColor(this.highlight ? PRIMARY_COLOR : $r('app.color.text_tertiary'))
         .textAlign(TextAlign.End)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -3454,7 +3454,7 @@ struct LayoutEditor {
       .width(this.getControlBodyWidthValue(control) - CONTROL_SWIPE_HANDLE_SIZE)
       .fontSize(this.getSwipeDirectionArrowFontSize(control))
       .fontWeight(FontWeight.Bold)
-      .fontColor('rgba(253,230,138,0.92)')
+      .fontColor($r('app.color.editor_swipe_direction_text'))
       .textAlign(TextAlign.Center)
   }
 
@@ -3463,7 +3463,7 @@ struct LayoutEditor {
     Text(this.getControlBindingCaptionText(control))
       .width(this.getBindingCaptionWidthValue(control))
       .fontSize(this.getBindingLabelFontSize(control))
-      .fontColor('#EAECF0')
+      .fontColor($r('app.color.editor_text_secondary'))
       .textAlign(TextAlign.Center)
       .lineHeight(this.getBindingLabelFontSize(control) + 4)
   }
@@ -3474,31 +3474,31 @@ struct LayoutEditor {
       Text('↑')
         .fontSize(this.getMoveGlyphArrowSize(control))
         .fontWeight(FontWeight.Bold)
-        .fontColor('#F8FAFC')
+        .fontColor($r('app.color.editor_text_primary'))
         .position({ x: this.getMoveGlyphHalfGap(control), y: 0 })
 
       Text('↓')
         .fontSize(this.getMoveGlyphArrowSize(control))
         .fontWeight(FontWeight.Bold)
-        .fontColor('#F8FAFC')
+        .fontColor($r('app.color.editor_text_primary'))
         .position({ x: this.getMoveGlyphHalfGap(control), y: this.getRoundGlyphSize(control) - this.getMoveGlyphArrowSize(control) })
 
       Text('←')
         .fontSize(this.getMoveGlyphArrowSize(control))
         .fontWeight(FontWeight.Bold)
-        .fontColor('#F8FAFC')
+        .fontColor($r('app.color.editor_text_primary'))
         .position({ x: 0, y: this.getMoveGlyphHalfGap(control) - 1 })
 
       Text('→')
         .fontSize(this.getMoveGlyphArrowSize(control))
         .fontWeight(FontWeight.Bold)
-        .fontColor('#F8FAFC')
+        .fontColor($r('app.color.editor_text_primary'))
         .position({ x: this.getRoundGlyphSize(control) - this.getMoveGlyphArrowSize(control), y: this.getMoveGlyphHalfGap(control) - 1 })
 
       Column()
         .width(this.getMoveGlyphCenterSize(control))
         .height(this.getMoveGlyphCenterSize(control))
-        .backgroundColor('rgba(255,255,255,0.18)')
+        .backgroundColor($r('app.color.editor_glyph_center_bg'))
         .borderRadius(this.getMoveGlyphCenterSize(control))
         .position({ x: this.getMoveGlyphHalfGap(control), y: this.getMoveGlyphHalfGap(control) })
     }
@@ -3512,7 +3512,7 @@ struct LayoutEditor {
       Column()
         .width(this.getLookTopBarWidth(control))
         .height(this.getLookTopBarHeight(control))
-        .backgroundColor('rgba(255,255,255,0.82)')
+        .backgroundColor($r('app.color.editor_look_bar_bg'))
         .borderRadius(2)
         .position({ x: Math.round((this.getRoundGlyphSize(control) - this.getLookTopBarWidth(control)) / 2), y: 2 })
 
@@ -3521,13 +3521,13 @@ struct LayoutEditor {
           .width(this.getLookLensSize(control))
           .height(this.getLookLensSize(control))
           .borderRadius(this.getLookLensSize(control))
-          .border({ width: 2, color: '#F8FAFC' })
+          .border({ width: 2, color: $r('app.color.editor_look_border') })
       }
       .width(this.getLookCameraBodyWidth(control))
       .height(this.getLookCameraBodyHeight(control))
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
-      .border({ width: 2, color: '#F8FAFC' })
+      .border({ width: 2, color: $r('app.color.editor_look_border') })
       .borderRadius(6)
       .position({ x: Math.round((this.getRoundGlyphSize(control) - this.getLookCameraBodyWidth(control)) / 2),
         y: Math.max(6, Math.round(this.getLookGlyphHeight(control) * 0.25)) })
@@ -3541,9 +3541,9 @@ struct LayoutEditor {
     Column()
       .width(CONTROL_SWIPE_HANDLE_SIZE)
       .height(CONTROL_SWIPE_HANDLE_SIZE)
-      .backgroundColor(handle === 'start' ? '#E2E8F0' : '#FDE68A')
+      .backgroundColor(handle === 'start' ? $r('app.color.editor_swipe_start') : $r('app.color.editor_warning_highlight'))
       .borderRadius(CONTROL_SWIPE_HANDLE_SIZE)
-      .border({ width: 2, color: 'rgba(15, 23, 42, 0.72)' })
+      .border({ width: 2, color: $r('app.color.editor_swipe_border') })
       .onTouch((event) => {
         const action = this.readTouchAction(event as Object);
         if (action === TOUCH_ACTION_DOWN) {
@@ -3591,7 +3591,7 @@ struct LayoutEditor {
         .width(this.getBindingCaptionWidthValue(control))
         .fontSize(this.getControlNameFontSize(control))
         .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
+        .fontColor($r('app.color.editor_text_on_bg'))
         .textAlign(TextAlign.Center)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -3620,7 +3620,7 @@ struct LayoutEditor {
           Text(control.label)
             .fontSize(this.getControlNameFontSize(control))
             .fontWeight(FontWeight.Bold)
-            .fontColor('#FFFFFF')
+            .fontColor($r('app.color.editor_text_on_bg'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .textAlign(TextAlign.Center)
@@ -3665,8 +3665,8 @@ struct LayoutEditor {
   private buildControlLibraryItem(libraryItem: ControlLibraryItem) {
     Button(libraryItem.label)
       .width('100%')
-      .backgroundColor('rgba(255, 255, 255, 0.12)')
-      .fontColor('#FFFFFF')
+      .backgroundColor($r('app.color.editor_button_bg'))
+      .fontColor($r('app.color.editor_text_on_bg'))
       .onClick(() => {
         this.addControlFromLibrary(libraryItem);
       })
@@ -3685,16 +3685,16 @@ struct LayoutEditor {
           Text('导入被控游戏截图后开始布置控件')
             .fontSize(24)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#F8FAFC')
+            .fontColor($r('app.color.editor_text_primary'))
 
           Text('截图用于辅助定位控件位置。\n请对运行游戏的设备进行全屏截图，不要调整截图分辨率。\n导入截图后，点击左上角按钮开始添加控件。')
             .fontSize(14)
-            .fontColor('#CBD5E1')
+            .fontColor($r('app.color.editor_text_tertiary'))
             .textAlign(TextAlign.Center)
 
           Button('导入被控游戏截图')
             .backgroundColor(PRIMARY_COLOR)
-            .fontColor('#FFFFFF')
+            .fontColor($r('app.color.text_on_primary'))
             .onClick(() => {
               this.importBackgroundImage();
             })
@@ -3714,7 +3714,7 @@ struct LayoutEditor {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#07111F')
+    .backgroundColor($r('app.color.editor_bg'))
     .onTouch((event) => {
       this.handleCanvasTouch(event as Object);
     })
@@ -3741,22 +3741,22 @@ struct LayoutEditor {
       Text('添加控件')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
+        .fontColor($r('app.color.editor_text_on_bg'))
         .width('100%')
 
       Text('控件默认位于画布中央，可自行拖动到想要的位置。在屏幕空白处滑动也可以调整控件位置。')
         .fontSize(12)
-        .fontColor('#CBD5E1')
+        .fontColor($r('app.color.editor_text_tertiary'))
         .width('100%')
 
       Text('在屏幕任意位置双指捏合可调整控件大小。滑动控件还能拖动两端圆点拉伸和转向。')
         .fontSize(12)
-        .fontColor('#CBD5E1')
+        .fontColor($r('app.color.editor_text_tertiary'))
         .width('100%')
 
       Text('选中控件后按下键盘或手柄按键即可进行按键绑定。绑定后如需重新绑定，请点击菜单中的清除绑定按钮。')
         .fontSize(12)
-        .fontColor('#CBD5E1')
+        .fontColor($r('app.color.editor_text_tertiary'))
         .width('100%')
 
       ForEach(CONTROL_LIBRARY_ITEMS, (libraryItem: ControlLibraryItem) => {
@@ -3772,15 +3772,15 @@ struct LayoutEditor {
       Text('当前控件')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
+        .fontColor($r('app.color.editor_text_on_bg'))
         .width('100%')
 
       Row({ space: 12 }) {
         Button('清除绑定')
           .layoutWeight(1)
           .enabled(this.hasSelectedControlBinding())
-          .backgroundColor('rgba(255, 255, 255, 0.14)')
-          .fontColor('#FFFFFF')
+          .backgroundColor($r('app.color.editor_button_bg_alt'))
+          .fontColor($r('app.color.editor_text_on_bg'))
           .onClick(() => {
             this.clearSelectedBinding();
           })
@@ -3788,8 +3788,8 @@ struct LayoutEditor {
         Button('删除选中')
           .layoutWeight(1)
           .enabled(this.hasSelectedControl())
-          .backgroundColor('#FEE4E2')
-          .fontColor('#B42318')
+          .backgroundColor($r('app.color.color_danger_bg'))
+          .fontColor($r('app.color.color_danger_text'))
           .onClick(() => {
             this.removeSelectedControl();
           })
@@ -3797,17 +3797,17 @@ struct LayoutEditor {
 
       Text(this.controlEditorMessage)
         .fontSize(12)
-        .fontColor('#E2E8F0')
+        .fontColor($r('app.color.editor_text_secondary'))
         .width('100%')
 
       Text(`类型：${this.getSelectedControlTypeLabel()} · 绑定：${this.getSelectedControlBindingText()}`)
         .fontSize(12)
-        .fontColor('#CBD5E1')
+        .fontColor($r('app.color.editor_text_tertiary'))
         .width('100%')
 
       Text(this.bindingCaptureHint)
         .fontSize(12)
-        .fontColor(this.isBindingCaptureListening() ? '#FDE68A' : '#CBD5E1')
+        .fontColor(this.isBindingCaptureListening() ? $r('app.color.editor_warning_highlight') : $r('app.color.editor_text_tertiary'))
         .width('100%')
 
     }
@@ -3825,7 +3825,7 @@ struct LayoutEditor {
             }
             .width('100%')
             .padding(14)
-            .backgroundColor('rgba(255, 255, 255, 0.08)')
+            .backgroundColor($r('app.color.editor_panel_bg'))
             .borderRadius(20)
           }
 
@@ -3835,7 +3835,7 @@ struct LayoutEditor {
             }
             .width('100%')
             .padding(14)
-            .backgroundColor('rgba(255, 255, 255, 0.08)')
+            .backgroundColor($r('app.color.editor_panel_bg'))
             .borderRadius(20)
           }
 
@@ -3843,7 +3843,7 @@ struct LayoutEditor {
             Text(this.currentLayoutName)
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#FFFFFF')
+              .fontColor($r('app.color.editor_text_on_bg'))
               .width('100%')
 
             Text(`${this.getExecutionModeLabel()} · 已绑定 ${this.getBoundControlCount()} 个控件`)
@@ -3854,45 +3854,45 @@ struct LayoutEditor {
 
             Text(`${this.connectedDeviceName} · ${this.currentLayoutHasBackground ? '已导入截图' : '未导入截图'}`)
               .fontSize(12)
-              .fontColor('#CBD5E1')
+              .fontColor($r('app.color.editor_text_tertiary'))
               .width('100%')
 
             Text(this.getExecutionModeDescription())
               .fontSize(12)
-              .fontColor('#CBD5E1')
+              .fontColor($r('app.color.editor_text_tertiary'))
               .width('100%')
 
             Text(this.executionStatusText)
               .fontSize(12)
-              .fontColor(this.isExecutionMode() ? '#D1FAE5' : '#BFDBFE')
+              .fontColor(this.isExecutionMode() ? $r('app.color.editor_success_light') : $r('app.color.editor_info_light'))
               .width('100%')
 
             Text(this.getLayoutRepositoryMetricsText())
               .fontSize(12)
-              .fontColor('#CBD5E1')
+              .fontColor($r('app.color.editor_text_tertiary'))
               .width('100%')
 
             Text(this.getBackgroundDescription())
               .fontSize(12)
-              .fontColor('#94A3B8')
+              .fontColor($r('app.color.editor_text_quaternary'))
               .width('100%')
 
             Text(this.getNativeInputMetricsText())
               .fontSize(11)
-              .fontColor('#94A3B8')
+              .fontColor($r('app.color.editor_text_quaternary'))
               .width('100%')
           }
           .width('100%')
           .padding(14)
-          .backgroundColor('rgba(255, 255, 255, 0.08)')
+          .backgroundColor($r('app.color.editor_panel_bg'))
           .borderRadius(20)
 
           Row({ space: 8 }) {
             Button(this.isExecutionMode() ? '返回编辑' : '保存并执行')
               .layoutWeight(1)
               .enabled(this.isExecutionMode() || this.getBoundControlCount() > 0)
-              .backgroundColor(this.isExecutionMode() ? 'rgba(255, 255, 255, 0.12)' : SUCCESS_COLOR)
-              .fontColor('#FFFFFF')
+              .backgroundColor(this.isExecutionMode() ? $r('app.color.editor_button_bg') : SUCCESS_COLOR)
+              .fontColor($r('app.color.editor_text_on_bg'))
               .onClick(() => {
                 if (this.isExecutionMode()) {
                   this.exitExecutionMode();
@@ -3903,8 +3903,8 @@ struct LayoutEditor {
 
             Button('返回设备页')
               .layoutWeight(1)
-              .backgroundColor('rgba(255, 255, 255, 0.12)')
-              .fontColor('#FFFFFF')
+              .backgroundColor($r('app.color.editor_button_bg'))
+              .fontColor($r('app.color.editor_text_on_bg'))
               .onClick(() => {
                 router.back();
               })
@@ -3916,7 +3916,7 @@ struct LayoutEditor {
               .width('100%')
               .enabled(!this.isExecutionMode())
               .backgroundColor(PRIMARY_COLOR)
-              .fontColor('#FFFFFF')
+              .fontColor($r('app.color.text_on_primary'))
               .onClick(() => {
                 this.importBackgroundImage();
               })
@@ -3926,8 +3926,8 @@ struct LayoutEditor {
           Button('清除被控游戏截图')
             .width('100%')
             .enabled(this.currentLayoutHasBackground && !this.isExecutionMode())
-            .backgroundColor('rgba(127, 29, 29, 0.84)')
-            .fontColor('#FFFFFF')
+            .backgroundColor($r('app.color.editor_clear_bg_btn'))
+            .fontColor($r('app.color.editor_text_on_bg'))
             .onClick(() => {
               this.clearBackgroundImage();
             })
@@ -3942,7 +3942,7 @@ struct LayoutEditor {
     .width(MENU_PANEL_WIDTH)
     .height(this.getMenuPanelHeight())
     .padding(14)
-    .backgroundColor('rgba(2, 6, 23, 0.88)')
+    .backgroundColor($r('app.color.editor_menu_bg'))
     .borderRadius(24)
     .position({
       x: this.getMenuPanelX(),
@@ -3956,30 +3956,30 @@ struct LayoutEditor {
       Row() {}
         .width(22)
         .height(2)
-        .backgroundColor('#FFFFFF')
+        .backgroundColor($r('app.color.editor_text_on_bg'))
         .borderRadius(99)
 
       Row() {}
         .width(22)
         .height(2)
-        .backgroundColor('#FFFFFF')
+        .backgroundColor($r('app.color.editor_text_on_bg'))
         .borderRadius(99)
 
       Row() {}
         .width(22)
         .height(2)
-        .backgroundColor('#FFFFFF')
+        .backgroundColor($r('app.color.editor_text_on_bg'))
         .borderRadius(99)
     }
     .width(MENU_BUTTON_WIDTH)
     .height(MENU_BUTTON_HEIGHT)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .backgroundColor('rgba(15, 23, 42, 0.88)')
+    .backgroundColor($r('app.color.editor_menu_btn_bg'))
     .borderRadius(22)
     .border({
       width: 1,
-      color: 'rgba(255,255,255,0.20)',
+      color: $r('app.color.editor_menu_btn_border'),
     })
     .position({
       x: this.menuButtonX,
@@ -3996,17 +3996,17 @@ struct LayoutEditor {
       Column()
         .width(EXECUTION_TOUCH_FEEDBACK_SIZE)
         .height(EXECUTION_TOUCH_FEEDBACK_SIZE)
-        .backgroundColor(this.executionTouchFeedbackDimmed ? 'rgba(52, 211, 153, 0.12)' : 'rgba(52, 211, 153, 0.28)')
+        .backgroundColor(this.executionTouchFeedbackDimmed ? $r('app.color.editor_touch_feedback_outer_dimmed') : $r('app.color.editor_touch_feedback_outer'))
         .borderRadius(EXECUTION_TOUCH_FEEDBACK_SIZE)
         .border({
           width: 2,
-          color: this.executionTouchFeedbackDimmed ? 'rgba(52, 211, 153, 0.42)' : 'rgba(110, 231, 183, 0.96)',
+          color: this.executionTouchFeedbackDimmed ? $r('app.color.editor_touch_feedback_border_dimmed') : $r('app.color.editor_touch_feedback_border'),
         })
 
       Column()
         .width(10)
         .height(10)
-        .backgroundColor(this.executionTouchFeedbackDimmed ? 'rgba(110, 231, 183, 0.64)' : '#ECFDF5')
+        .backgroundColor(this.executionTouchFeedbackDimmed ? $r('app.color.editor_touch_feedback_center_dimmed') : $r('app.color.editor_touch_feedback_center'))
         .borderRadius(10)
     }
     .width(EXECUTION_TOUCH_FEEDBACK_SIZE)
@@ -4031,7 +4031,7 @@ struct LayoutEditor {
 
       this.buildFloatingMenuButton()
     }
-    .backgroundColor('#07111F')
+    .backgroundColor($r('app.color.editor_bg'))
     .height('100%')
     .width('100%')
     .onAreaChange((_, newValue) => {

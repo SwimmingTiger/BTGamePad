@@ -3,10 +3,10 @@ import router from '@ohos.router';
 import { HidDebugState, RemoteDeviceItem } from '../services/AbsoluteTouchHidService';
 import { hidService } from '../services/AppSession';
 
-const PRIMARY_COLOR = '#1456F0';
-const SUCCESS_COLOR = '#0D8A5F';
-const WARNING_COLOR = '#B06A00';
-const CARD_COLOR = '#F5F7FB';
+const PRIMARY_COLOR = $r('app.color.color_primary');
+const SUCCESS_COLOR = $r('app.color.color_success');
+const WARNING_COLOR = $r('app.color.color_warning');
+const CARD_COLOR = $r('app.color.bg_card');
 
 @Component
 struct StatusChip {
@@ -18,14 +18,14 @@ struct StatusChip {
       Text(this.label)
         .layoutWeight(1)
         .fontSize(14)
-        .fontColor('#1E2430')
+        .fontColor($r('app.color.text_secondary'))
         .textAlign(TextAlign.End)
         .padding({ right: 8 })
 
       Row() {
         Text(this.active ? '已完成' : '未完成')
           .fontSize(11)
-          .fontColor('#FFFFFF')
+          .fontColor($r('app.color.text_on_primary'))
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .backgroundColor(this.active ? SUCCESS_COLOR : WARNING_COLOR)
           .borderRadius(999)
@@ -289,14 +289,14 @@ struct Index {
       Text('连接设备')
         .layoutWeight(1)
         .fontSize(14)
-        .fontColor('#1E2430')
+        .fontColor($r('app.color.text_secondary'))
         .textAlign(TextAlign.End)
         .padding({ right: 8 })
 
       Text(this.getSelectedDeviceName())
         .layoutWeight(1)
         .fontSize(13)
-        .fontColor(this.hasSelectedDevice() ? PRIMARY_COLOR : '#667085')
+        .fontColor(this.hasSelectedDevice() ? PRIMARY_COLOR : $r('app.color.text_tertiary'))
         .textAlign(TextAlign.Start)
         .padding({ left: 8 })
         .maxLines(1)
@@ -352,16 +352,16 @@ struct Index {
             .width(16)
             .height(16)
             .borderRadius(8)
-            .backgroundColor('#FEE4E2')
+            .backgroundColor($r('app.color.color_danger_bg'))
           Column()
             .width(12)
             .height(2)
-            .backgroundColor('#F04438')
+            .backgroundColor($r('app.color.color_danger'))
             .rotate({ angle: -45 })
         }
       }
       .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-      .backgroundColor('#FFF1F3')
+      .backgroundColor($r('app.color.color_danger_bg_light'))
       .borderRadius(999)
     } else {
       Row({ space: 2 }) {
@@ -369,26 +369,26 @@ struct Index {
           .width(4)
           .height(6)
           .borderRadius(2)
-          .backgroundColor(this.getSignalLevel(rssi) >= 1 ? PRIMARY_COLOR : '#D0D5DD')
+          .backgroundColor(this.getSignalLevel(rssi) >= 1 ? PRIMARY_COLOR : $r('app.color.inactive_gray'))
         Column()
           .width(4)
           .height(9)
           .borderRadius(2)
-          .backgroundColor(this.getSignalLevel(rssi) >= 2 ? PRIMARY_COLOR : '#D0D5DD')
+          .backgroundColor(this.getSignalLevel(rssi) >= 2 ? PRIMARY_COLOR : $r('app.color.inactive_gray'))
         Column()
           .width(4)
           .height(12)
           .borderRadius(2)
-          .backgroundColor(this.getSignalLevel(rssi) >= 3 ? PRIMARY_COLOR : '#D0D5DD')
+          .backgroundColor(this.getSignalLevel(rssi) >= 3 ? PRIMARY_COLOR : $r('app.color.inactive_gray'))
         Column()
           .width(4)
           .height(15)
           .borderRadius(2)
-          .backgroundColor(this.getSignalLevel(rssi) >= 4 ? PRIMARY_COLOR : '#D0D5DD')
+          .backgroundColor(this.getSignalLevel(rssi) >= 4 ? PRIMARY_COLOR : $r('app.color.inactive_gray'))
       }
       .alignItems(VerticalAlign.Bottom)
       .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-      .backgroundColor('#EEF4FF')
+      .backgroundColor($r('app.color.tint_blue_bg'))
       .borderRadius(999)
     }
   }
@@ -417,7 +417,7 @@ struct Index {
             .fontSize(12)
             .fontColor(device.isPaired ? SUCCESS_COLOR : WARNING_COLOR)
             .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-            .backgroundColor(device.isPaired ? '#E7F8F0' : '#FFF4E5')
+            .backgroundColor(device.isPaired ? $r('app.color.tint_green_bg') : $r('app.color.tint_orange_bg'))
             .borderRadius(999)
             .onClick(() => {
               this.showPairDetails(device);
@@ -429,8 +429,8 @@ struct Index {
       Button(this.isDevicePairing(device) ? '配对中' : (this.isDeviceConnecting(device) ? '连接中' : (this.isDeviceConnected(device) ? '断开' : '连接')))
         .width('100%')
         .enabled(this.isReadyForSelection())
-        .backgroundColor((this.isDevicePairing(device) || this.isDeviceConnecting(device) || this.isDeviceConnected(device)) ? '#F04438' : PRIMARY_COLOR)
-        .fontColor('#FFFFFF')
+        .backgroundColor((this.isDevicePairing(device) || this.isDeviceConnecting(device) || this.isDeviceConnected(device)) ? $r('app.color.color_danger') : PRIMARY_COLOR)
+        .fontColor($r('app.color.text_on_primary'))
         .onClick(() => {
           if (this.isDevicePairing(device) || this.isDeviceConnecting(device) || this.isDeviceConnected(device)) {
             this.disconnectDevice(device.deviceId);
@@ -440,7 +440,7 @@ struct Index {
         })
     }
     .padding(18)
-    .backgroundColor((this.isDevicePairing(device) || this.isDeviceConnecting(device) || this.isDeviceConnected(device)) ? '#EAF1FF' : (device.isSelected ? '#F5F8FF' : '#FFFFFF'))
+    .backgroundColor((this.isDevicePairing(device) || this.isDeviceConnecting(device) || this.isDeviceConnected(device)) ? $r('app.color.bg_card_active') : (device.isSelected ? $r('app.color.bg_card_selected') : $r('app.color.bg_page')))
     .borderRadius(20)
   }
 
@@ -451,13 +451,13 @@ struct Index {
           Text('选择要操控的蓝牙设备')
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#101828')
+            .fontColor($r('app.color.text_primary'))
             .width('100%')
             .textAlign(TextAlign.Start)
 
           Text('本APP将模拟成蓝牙数位板与该设备建立连接。')
             .fontSize(15)
-            .fontColor('#667085')
+            .fontColor($r('app.color.text_tertiary'))
             .width('100%')
         }
         .alignItems(HorizontalAlign.Start)
@@ -466,12 +466,12 @@ struct Index {
           Text(this.getSetupStatusTitle())
             .fontSize(18)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#101828')
+            .fontColor($r('app.color.text_primary'))
             .width('100%')
 
           Text(this.getSetupStatusDescription())
             .fontSize(14)
-            .fontColor('#667085')
+            .fontColor($r('app.color.text_tertiary'))
             .width('100%')
 
           Column({ space: 10 }) {
@@ -487,7 +487,7 @@ struct Index {
               .layoutWeight(1)
               .enabled(!this.isPreparing)
               .backgroundColor(PRIMARY_COLOR)
-              .fontColor('#FFFFFF')
+              .fontColor($r('app.color.text_on_primary'))
               .onClick(() => {
                 this.enterDeviceSelectionStage();
               })
@@ -495,8 +495,8 @@ struct Index {
             Button(this.debugState.discovering ? '停止搜索' : '重新搜索')
               .layoutWeight(1)
               .enabled(!this.isPreparing)
-              .backgroundColor('#E8EEF9')
-              .fontColor('#1D4ED8')
+              .backgroundColor($r('app.color.tint_blue_bg_alt'))
+              .fontColor($r('app.color.tint_blue_text'))
               .onClick(() => {
                 if (this.debugState.discovering) {
                   hidService.stopDiscovery();
@@ -511,8 +511,8 @@ struct Index {
             Button('前往键位布局准备')
               .width('100%')
               .enabled(!this.navigatingToLayoutEditor)
-              .backgroundColor('#101828')
-              .fontColor('#FFFFFF')
+              .backgroundColor($r('app.color.dark_button_bg'))
+              .fontColor($r('app.color.text_on_primary'))
               .onClick(() => {
                 this.navigateToLayoutEditor();
               })
@@ -526,7 +526,7 @@ struct Index {
           Text('附近设备')
             .fontSize(18)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#101828')
+            .fontColor($r('app.color.text_primary'))
             .width('100%')
 
           if (this.devices.length > 0) {
@@ -539,15 +539,15 @@ struct Index {
             Column({ space: 8 }) {
               Text(this.isPreparing ? '正在搜索附近设备，请稍候。' : '还没有发现设备，可以点击“重新准备”或“重新搜索”。')
                 .fontSize(14)
-                .fontColor('#667085')
+                .fontColor($r('app.color.text_tertiary'))
                 .width('100%')
               Text('如果目标设备已配对，也会直接出现在列表中。')
                 .fontSize(12)
-                .fontColor('#98A2B3')
+                .fontColor($r('app.color.text_quaternary'))
                 .width('100%')
             }
             .padding(18)
-            .backgroundColor('#FFFFFF')
+            .backgroundColor($r('app.color.bg_page'))
             .borderRadius(20)
           }
         }
@@ -558,7 +558,7 @@ struct Index {
       .padding(20)
       .width('100%')
     }
-    .backgroundColor('#EEF3FB')
+    .backgroundColor($r('app.color.bg_page_surface'))
     .height('100%')
   }
 }
