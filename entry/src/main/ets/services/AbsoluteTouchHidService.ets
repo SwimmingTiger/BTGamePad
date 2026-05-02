@@ -530,7 +530,7 @@ export class AbsoluteTouchHidService {
     return new TouchMapping(
       true,
       clamp(calibration.centerX + normalizedX * calibration.radiusX, 0, ABSOLUTE_AXIS_MAX),
-      clamp(calibration.centerY - normalizedY * calibration.radiusY, 0, ABSOLUTE_AXIS_MAX)
+      clamp(calibration.centerY + normalizedY * calibration.radiusY, 0, ABSOLUTE_AXIS_MAX)
     );
   }
 
