@@ -526,14 +526,27 @@ struct LayoutEditor {
   private normalizeControlGeometry(control: LayoutControlItem): LayoutControlItem {
     let normalizedControl = control.clone();
     if (this.isRoundControlType(normalizedControl.inputKind)) {
-      const nextSize = Math.max(normalizedControl.width, this.toRoundControlWidthUnits(normalizedControl.height));
-      const size = clampEditorValue(
-        nextSize > 0 ? nextSize : CONTROL_DEFAULT_SIZE,
-        ROUND_CONTROL_MIN_SIZE,
-        CONTROL_MAX_SIZE
-      );
-      normalizedControl.width = size;
-      normalizedControl.height = this.toRoundControlHeightUnits(size);
+      if (this.hasBackgroundImageMetrics()) {
+        const nextSize = Math.max(normalizedControl.width, this.toRoundControlWidthUnits(normalizedControl.height));
+        const size = clampEditorValue(
+          nextSize > 0 ? nextSize : CONTROL_DEFAULT_SIZE,
+          ROUND_CONTROL_MIN_SIZE,
+          CONTROL_MAX_SIZE
+        );
+        normalizedControl.width = size;
+        normalizedControl.height = this.toRoundControlHeightUnits(size);
+      } else {
+        normalizedControl.width = clampEditorValue(
+          normalizedControl.width > 0 ? normalizedControl.width : CONTROL_DEFAULT_SIZE,
+          ROUND_CONTROL_MIN_SIZE,
+          CONTROL_MAX_SIZE
+        );
+        normalizedControl.height = clampEditorValue(
+          normalizedControl.height > 0 ? normalizedControl.height : CONTROL_DEFAULT_SIZE,
+          ROUND_CONTROL_MIN_SIZE,
+          CONTROL_MAX_SIZE
+        );
+      }
     } else if (this.isLookControlType(normalizedControl.inputKind)) {
       const nextWidth = Math.max(normalizedControl.width, normalizedControl.height);
       normalizedControl.width = clampEditorValue(
