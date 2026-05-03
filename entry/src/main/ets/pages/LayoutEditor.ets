@@ -91,6 +91,8 @@ const MOUSE_ORIGIN_RESET_DELTA = -32768;
 const MOUSE_STICK_MOVE_STEP_MS = 16;
 const MOUSE_STICK_MOVE_STEP_FRACTION = 0.22;
 const EXECUTION_STICK_DEADZONE = 0.18;
+const STICK_LOOK_ANIM_INTERVAL_MS = 16;
+const STICK_LOOK_BASE_SPEED = 480;
 const EXECUTION_TOUCH_FEEDBACK_SIZE = 32;
 const EXECUTION_TOUCH_FEEDBACK_TIMEOUT_MS = 260;
 const HID_AXIS_MAX = 32767;
@@ -412,6 +414,16 @@ struct LayoutEditor {
   private mouseOriginResetNeeded: boolean = true;
   private mouseLastActiveControlId: string = '';
   private mouseStickMoveIntervalId: number = -1;
+  private stickLookAnimActive: boolean = false;
+  private stickLookAnimControlId: string = '';
+  private stickLookAnimCurrentX: number = 0;
+  private stickLookAnimCurrentY: number = 0;
+  private stickLookAnimDirectionX: number = 0;
+  private stickLookAnimDirectionY: number = 0;
+  private stickLookAnimMagnitude: number = 0;
+  private stickLookAnimIntervalId: number = -1;
+  private stickLookAnimCenterX: number = 0;
+  private stickLookAnimCenterY: number = 0;
 
   aboutToAppear(): void {
     this.menuExpanded = false;
@@ -1781,6 +1793,7 @@ struct LayoutEditor {
   private resetExecutionState(releaseTouch: boolean): void {
     this.clearExecutionFeedbackTimeout();
     this.stopKeyboardAnimation();
+    this.stopStickLookAnimation();
     this.clearMouseStickMoveInterval();
     this.mouseOriginResetNeeded = true;
     if (releaseTouch && this.keyboardAnimActive && hidService.getState().connected) {
@@ -1997,6 +2010,9 @@ struct LayoutEditor {
       if (control.inputKind !== CONTROL_TYPE_STICK_MOVE && control.inputKind !== CONTROL_TYPE_STICK_LOOK) {
         continue;
       }
+      if (control.inputKind === CONTROL_TYPE_STICK_LOOK) {
+        continue;
+      }
 
       const nextTarget = this.buildStickExecutionTarget(control, horizontalValue, verticalValue);
       if (nextTarget === null) {
@@ -2048,6 +2064,7 @@ struct LayoutEditor {
       return;
     }
 
+    this.updateStickLookAnimation(bindingCode, horizontalValue, verticalValue);
     this.updateStickExecutionTargets(bindingCode, horizontalValue, verticalValue);
     if (Math.sqrt(horizontalValue * horizontalValue + verticalValue * verticalValue) >= EXECUTION_STICK_DEADZONE) {
       this.executionStatusText = `正在执行 ${this.getBindingLabel(bindingCode)}。`;
@@ -2145,12 +2162,141 @@ struct LayoutEditor {
     this.mouseOriginResetNeeded = true;
   }
 
+  private updateStickLookAnimation(bindingCode: string, horizontalValue: number, verticalValue: number): void {
+    const magnitude = Math.sqrt(horizontalValue * horizontalValue + verticalValue * verticalValue);
+    if (magnitude < EXECUTION_STICK_DEADZONE) {
+      this.stopStickLookAnimation();
+      return;
+    }
+
+    let lookControl: LayoutControlItem | null = null;
+    for (const control of this.layoutControls) {
+      if (control.inputCode !== bindingCode) {
+        continue;
+      }
+      if (control.inputKind !== CONTROL_TYPE_STICK_LOOK) {
+        continue;
+      }
+      lookControl = control;
+      break;
+    }
+    if (lookControl === null) {
+      return;
+    }
+
+    const scaledMagnitude = clampEditorValue((magnitude - EXECUTION_STICK_DEADZONE) / (1 - EXECUTION_STICK_DEADZONE), 0, 1);
+    const dirX = horizontalValue / Math.max(magnitude, 0.0001);
+    const dirY = verticalValue / Math.max(magnitude, 0.0001);
+
+    this.stickLookAnimDirectionX = dirX;
+    this.stickLookAnimDirectionY = dirY;
+    this.stickLookAnimMagnitude = scaledMagnitude;
+
+    if (!this.stickLookAnimActive || this.stickLookAnimControlId !== lookControl.id) {
+      this.stickLookAnimControlId = lookControl.id;
+      const centerXUnits = this.isRoundControlType(lookControl.inputKind)
+        ? this.getRoundControlCenterXUnits(lookControl)
+        : this.getControlCenterX(lookControl);
+      const centerYUnits = this.isRoundControlType(lookControl.inputKind)
+        ? this.getRoundControlCenterYUnits(lookControl)
+        : this.getControlCenterY(lookControl);
+      this.stickLookAnimCenterX = centerXUnits;
+      this.stickLookAnimCenterY = centerYUnits;
+      this.stickLookAnimCurrentX = centerXUnits;
+      this.stickLookAnimCurrentY = centerYUnits;
+      this.startStickLookAnimation();
+    }
+  }
+
+  private startStickLookAnimation(): void {
+    if (this.stickLookAnimIntervalId >= 0) {
+      return;
+    }
+    this.stickLookAnimActive = true;
+    this.stickLookAnimIntervalId = setInterval(() => {
+      this.tickStickLookAnimation();
+    }, STICK_LOOK_ANIM_INTERVAL_MS);
+  }
+
+  private tickStickLookAnimation(): void {
+    if (!this.stickLookAnimActive || !hidService.getState().connected) {
+      this.stopStickLookAnimation();
+      return;
+    }
+
+    const unitsPerFrame = this.stickLookAnimMagnitude * STICK_LOOK_BASE_SPEED * STICK_LOOK_ANIM_INTERVAL_MS / 1000;
+    this.stickLookAnimCurrentX += this.stickLookAnimDirectionX * unitsPerFrame;
+    this.stickLookAnimCurrentY += this.stickLookAnimDirectionY * unitsPerFrame;
+
+    const outOfBounds = this.stickLookAnimCurrentX < 0 || this.stickLookAnimCurrentX > CONTROL_CANVAS_UNITS ||
+      this.stickLookAnimCurrentY < 0 || this.stickLookAnimCurrentY > CONTROL_CANVAS_UNITS;
+
+    if (outOfBounds) {
+      if (this.isSimulateMouseMode()) {
+        this.mouseClickUp();
+        this.mouseOriginResetNeeded = true;
+      } else {
+        hidService.releaseTouch();
+      }
+      this.stickLookAnimCurrentX = this.stickLookAnimCenterX;
+      this.stickLookAnimCurrentY = this.stickLookAnimCenterY;
+      this.dispatchedExecutionActive = false;
+      return;
+    }
+
+    if (this.isSimulateMouseMode()) {
+      const mouseDeltaX = Math.round(this.stickLookAnimDirectionX * unitsPerFrame * this.mouseSpeedMultiplier);
+      const mouseDeltaY = Math.round(this.stickLookAnimDirectionY * unitsPerFrame * this.mouseSpeedMultiplier);
+      if (mouseDeltaX !== 0 || mouseDeltaY !== 0) {
+        hidService.sendMouseMove(mouseDeltaX, mouseDeltaY);
+      }
+      this.mouseClickDown();
+    } else {
+      const hidX = this.toHidAxisValue(this.stickLookAnimCurrentX);
+      const hidY = this.toHidAxisValue(this.stickLookAnimCurrentY);
+      hidService.sendTouch(true, hidX, hidY);
+    }
+
+    this.dispatchedExecutionActive = true;
+    this.dispatchedExecutionControlId = this.stickLookAnimControlId;
+    this.dispatchedExecutionXUnits = this.stickLookAnimCurrentX;
+    this.dispatchedExecutionYUnits = this.stickLookAnimCurrentY;
+    this.executionActiveControlId = this.stickLookAnimControlId;
+    this.updateExecutionTouchFeedback(true, this.stickLookAnimCurrentX, this.stickLookAnimCurrentY);
+  }
+
+  private stopStickLookAnimation(): void {
+    if (this.stickLookAnimIntervalId >= 0) {
+      clearInterval(this.stickLookAnimIntervalId);
+      this.stickLookAnimIntervalId = -1;
+    }
+    if (this.stickLookAnimActive && hidService.getState().connected) {
+      if (this.isSimulateMouseMode()) {
+        this.mouseClickUp();
+        this.mouseOriginResetNeeded = true;
+      } else {
+        hidService.releaseTouch();
+      }
+      this.dispatchedExecutionActive = false;
+    }
+    this.stickLookAnimActive = false;
+    this.stickLookAnimControlId = '';
+    this.stickLookAnimCurrentX = 0;
+    this.stickLookAnimCurrentY = 0;
+    this.stickLookAnimDirectionX = 0;
+    this.stickLookAnimDirectionY = 0;
+    this.stickLookAnimMagnitude = 0;
+  }
+
   private isSimulateMouseMode(): boolean {
     return this.simulateMode === SIMULATE_MODE_MOUSE;
   }
 
   private reconcileExecutionOutput(): void {
     if (this.keyboardAnimActive) {
+      return;
+    }
+    if (this.stickLookAnimActive) {
       return;
     }
 
