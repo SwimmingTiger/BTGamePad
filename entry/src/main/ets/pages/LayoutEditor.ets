@@ -4734,14 +4734,6 @@ struct LayoutEditor {
                   })
               }
 
-              if (this.simulateMode === SIMULATE_MODE_DIGITIZER) {
-                Text('提示：竖屏设备和翻转设备选项对所有模拟模式生效')
-                  .fontSize(11)
-                  .fontColor($r('app.color.editor_text_tertiary'))
-                  .width('100%')
-                  .margin({ top: 8 })
-              }
-
               Row() {
                 Text('竖屏设备')
                   .fontSize(13)
