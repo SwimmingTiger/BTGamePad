@@ -84,6 +84,8 @@ const EXECUTION_MODE_EDIT = 'edit';
 const EXECUTION_MODE_EXECUTE = 'execute';
 const SIMULATE_MODE_DIGITIZER = 'digitizer';
 const SIMULATE_MODE_MOUSE = 'mouse';
+const PORTRAIT_MODE_DEFAULT = false;
+const FLIP_MODE_DEFAULT = false;
 const MOUSE_SPEED_DEFAULT = 2;
 const MOUSE_SPEED_MIN = 1;
 const MOUSE_SPEED_MAX = 30;
@@ -176,6 +178,16 @@ class EditorPoint {
 
   clone(): EditorPoint {
     return new EditorPoint(this.x, this.y);
+  }
+}
+
+class HidCoordinate {
+  x: number;
+  y: number;
+
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
   }
 }
 
@@ -409,6 +421,8 @@ struct LayoutEditor {
   @State executionTouchFeedbackYUnits: number = 0;
   @State simulateMode: string = SIMULATE_MODE_DIGITIZER;
   @State mouseSpeedMultiplier: number = MOUSE_SPEED_DEFAULT;
+  @State portraitMode: boolean = PORTRAIT_MODE_DEFAULT;
+  @State flipMode: boolean = FLIP_MODE_DEFAULT;
   private mouseEstimatedX: number = 0;
   private mouseEstimatedY: number = 0;
   private mouseOriginResetNeeded: boolean = true;
@@ -1969,6 +1983,56 @@ struct LayoutEditor {
     return clampEditorValue(Math.round(units / CONTROL_CANVAS_UNITS * HID_AXIS_MAX), 0, HID_AXIS_MAX);
   }
 
+  private transformHidCoordinates(x: number, y: number): HidCoordinate {
+    let transformedX = x;
+    let transformedY = y;
+    if (this.portraitMode) {
+      // 横屏→竖屏：逆时针旋转90°，(x,y) → (H-y, x)
+      const newX = HID_AXIS_MAX - transformedY;
+      const newY = transformedX;
+      transformedX = newX;
+      transformedY = newY;
+    }
+    if (this.flipMode) {
+      // 翻转设备：(x,y) → (W-x, H-y)
+      transformedX = HID_AXIS_MAX - transformedX;
+      transformedY = HID_AXIS_MAX - transformedY;
+    }
+    return new HidCoordinate(transformedX, transformedY);
+  }
+
+  private transformCanvasUnits(x: number, y: number): HidCoordinate {
+    let transformedX = x;
+    let transformedY = y;
+    if (this.portraitMode) {
+      const newX = CONTROL_CANVAS_UNITS - transformedY;
+      const newY = transformedX;
+      transformedX = newX;
+      transformedY = newY;
+    }
+    if (this.flipMode) {
+      transformedX = CONTROL_CANVAS_UNITS - transformedX;
+      transformedY = CONTROL_CANVAS_UNITS - transformedY;
+    }
+    return new HidCoordinate(transformedX, transformedY);
+  }
+
+  private transformCanvasDelta(dx: number, dy: number): HidCoordinate {
+    let transformedDX = dx;
+    let transformedDY = dy;
+    if (this.portraitMode) {
+      const newDX = -transformedDY;
+      const newDY = transformedDX;
+      transformedDX = newDX;
+      transformedDY = newDY;
+    }
+    if (this.flipMode) {
+      transformedDX = -transformedDX;
+      transformedDY = -transformedDY;
+    }
+    return new HidCoordinate(transformedDX, transformedDY);
+  }
+
   private buildStickExecutionTarget(control: LayoutControlItem, horizontalValue: number, verticalValue: number): ExecutionTouchTarget | null {
     const magnitude = Math.sqrt(horizontalValue * horizontalValue + verticalValue * verticalValue);
     if (magnitude < EXECUTION_STICK_DEADZONE) {
@@ -2089,8 +2153,9 @@ struct LayoutEditor {
   private moveMouseToCanvasPosition(xUnits: number, yUnits: number): void {
     this.resetMouseToOrigin();
 
-    const targetX = Math.round(xUnits * this.mouseSpeedMultiplier);
-    const targetY = Math.round(yUnits * this.mouseSpeedMultiplier);
+    const transformed = this.transformCanvasUnits(xUnits, yUnits);
+    const targetX = Math.round(transformed.x * this.mouseSpeedMultiplier);
+    const targetY = Math.round(transformed.y * this.mouseSpeedMultiplier);
     const deltaX = targetX - this.mouseEstimatedX;
     const deltaY = targetY - this.mouseEstimatedY;
 
@@ -2135,8 +2200,9 @@ struct LayoutEditor {
         return;
       }
 
-      const targetScreenX = Math.round(target.xUnits * this.mouseSpeedMultiplier);
-      const targetScreenY = Math.round(target.yUnits * this.mouseSpeedMultiplier);
+      const transformed = this.transformCanvasUnits(target.xUnits, target.yUnits);
+      const targetScreenX = Math.round(transformed.x * this.mouseSpeedMultiplier);
+      const targetScreenY = Math.round(transformed.y * this.mouseSpeedMultiplier);
 
       const dx = targetScreenX - this.mouseEstimatedX;
       const dy = targetScreenY - this.mouseEstimatedY;
@@ -2245,16 +2311,18 @@ struct LayoutEditor {
     }
 
     if (this.isSimulateMouseMode()) {
-      const mouseDeltaX = Math.round(this.stickLookAnimDirectionX * unitsPerFrame * this.mouseSpeedMultiplier);
-      const mouseDeltaY = Math.round(this.stickLookAnimDirectionY * unitsPerFrame * this.mouseSpeedMultiplier);
-      if (mouseDeltaX !== 0 || mouseDeltaY !== 0) {
-        hidService.sendMouseMove(mouseDeltaX, mouseDeltaY);
+      const rawDX = Math.round(this.stickLookAnimDirectionX * unitsPerFrame * this.mouseSpeedMultiplier);
+      const rawDY = Math.round(this.stickLookAnimDirectionY * unitsPerFrame * this.mouseSpeedMultiplier);
+      const transformedDelta = this.transformCanvasDelta(rawDX, rawDY);
+      if (transformedDelta.x !== 0 || transformedDelta.y !== 0) {
+        hidService.sendMouseMove(transformedDelta.x, transformedDelta.y);
       }
       this.mouseClickDown();
     } else {
-      const hidX = this.toHidAxisValue(this.stickLookAnimCurrentX);
-      const hidY = this.toHidAxisValue(this.stickLookAnimCurrentY);
-      hidService.sendTouch(true, hidX, hidY);
+      const rawX = this.toHidAxisValue(this.stickLookAnimCurrentX);
+      const rawY = this.toHidAxisValue(this.stickLookAnimCurrentY);
+      const transformed = this.transformHidCoordinates(rawX, rawY);
+      hidService.sendTouch(true, transformed.x, transformed.y);
     }
 
     this.dispatchedExecutionActive = true;
@@ -2367,9 +2435,10 @@ struct LayoutEditor {
         }
       }
     } else {
-      const hidX = this.toHidAxisValue(target.xUnits);
-      const hidY = this.toHidAxisValue(target.yUnits);
-      hidService.sendTouch(true, hidX, hidY);
+      const rawX = this.toHidAxisValue(target.xUnits);
+      const rawY = this.toHidAxisValue(target.yUnits);
+      const transformed = this.transformHidCoordinates(rawX, rawY);
+      hidService.sendTouch(true, transformed.x, transformed.y);
     }
   }
 
@@ -2734,9 +2803,10 @@ struct LayoutEditor {
         this.moveMouseToCanvasPosition(this.keyboardAnimCurrentX, this.keyboardAnimCurrentY);
         this.mouseClickDown();
       } else {
-        const hidX = this.toHidAxisValue(this.keyboardAnimCurrentX);
-        const hidY = this.toHidAxisValue(this.keyboardAnimCurrentY);
-        hidService.sendTouch(true, hidX, hidY);
+        const rawX = this.toHidAxisValue(this.keyboardAnimCurrentX);
+        const rawY = this.toHidAxisValue(this.keyboardAnimCurrentY);
+        const transformed = this.transformHidCoordinates(rawX, rawY);
+        hidService.sendTouch(true, transformed.x, transformed.y);
       }
     } else {
       if (this.isSimulateMouseMode()) {
@@ -4663,6 +4733,44 @@ struct LayoutEditor {
                     this.mouseSpeedMultiplier = Math.round(value);
                   })
               }
+
+              if (this.simulateMode === SIMULATE_MODE_DIGITIZER) {
+                Text('提示：竖屏设备和翻转设备选项对所有模拟模式生效')
+                  .fontSize(11)
+                  .fontColor($r('app.color.editor_text_tertiary'))
+                  .width('100%')
+                  .margin({ top: 8 })
+              }
+
+              Row() {
+                Text('竖屏设备')
+                  .fontSize(13)
+                  .fontColor($r('app.color.editor_text_on_bg'))
+                  .layoutWeight(1)
+
+                Toggle({ type: ToggleType.Switch, isOn: this.portraitMode })
+                  .selectedColor(PRIMARY_COLOR)
+                  .onChange((isOn: boolean) => {
+                    this.portraitMode = isOn;
+                  })
+              }
+              .width('100%')
+              .margin({ top: 8 })
+
+              Row() {
+                Text('翻转设备')
+                  .fontSize(13)
+                  .fontColor($r('app.color.editor_text_on_bg'))
+                  .layoutWeight(1)
+
+                Toggle({ type: ToggleType.Switch, isOn: this.flipMode })
+                  .selectedColor(PRIMARY_COLOR)
+                  .onChange((isOn: boolean) => {
+                    this.flipMode = isOn;
+                  })
+              }
+              .width('100%')
+              .margin({ top: 8 })
             }
             .width('100%')
             .padding(12)
