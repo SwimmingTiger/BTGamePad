@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "键鼠/手柄转蓝牙触控/笔/鼠标"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "蓝牙输入映射"
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
+      "value": "蓝牙输入映射"
     }
   ]
 }
