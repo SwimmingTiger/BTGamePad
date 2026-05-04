@@ -13,14 +13,19 @@
     "installationFree": false,
     "requestPermissions": [
       {
-        "name": "ohos.permission.ACCESS_BLUETOOTH",
-        "reason": "$string:bluetooth_permission_reason",
+        "name": "ohos.permission.SYSTEM_FLOAT_WINDOW",
+        "reason": "$string:float_window_permission_reason"
+      },
+      {
+        "name": "ohos.permission.CUSTOM_SCREEN_RECORDING",
+        "reason": "$string:screen_record_permission_reason",
         "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
+          "when": "always"
         }
+      },
+      {
+        "name": "ohos.permission.INPUT_MONITORING",
+        "reason": "$string:input_monitor_permission_reason"
       },
       {
         "name": "ohos.permission.INTERNET",
@@ -31,10 +36,6 @@
           ],
           "when": "inuse"
         }
-      },
-      {
-        "name": "ohos.permission.GET_WIFI_INFO",
-        "reason": "$string:wifi_info_permission_reason"
       }
     ],
     "pages": "$profile:main_pages",
@@ -43,7 +44,7 @@
         "name": "EntryAbility",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
-        "icon": "$media:layered_image",
+        "icon": "$media:app_icon",
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
@@ -58,20 +59,6 @@
             ]
           }
         ]
-      }
-    ],
-    "extensionAbilities": [
-      {
-        "name": "EntryBackupAbility",
-        "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
-        "type": "backup",
-        "exported": false,
-        "metadata": [
-          {
-            "name": "ohos.extension.backup",
-            "resource": "$profile:backup_config"
-          }
-        ],
       }
     ]
   }

@@ -7,6 +7,14 @@
     {
       "name": "bluetooth_permission_reason",
       "value": "用于将手柄映射后的HID输入发送到远程设备"
+    },
+    {
+      "name": "internet_permission_reason",
+      "value": "用于接收鼠标位置反馈UDP数据包"
+    },
+    {
+      "name": "wifi_info_permission_reason",
+      "value": "用于获取本机IP地址显示给被控端"
     }
   ]
 }

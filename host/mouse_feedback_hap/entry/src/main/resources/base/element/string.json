@@ -1,0 +1,32 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "获取鼠标位置通过 UDP 发送"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "鼠标位置反馈"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "鼠标位置反馈"
+    },
+    {
+      "name": "float_window_permission_reason",
+      "value": "用于悬浮窗显示"
+    },
+    {
+      "name": "screen_record_permission_reason",
+      "value": "用于获取输入事件监听所需的系统权限"
+    },
+    {
+      "name": "input_monitor_permission_reason",
+      "value": "需要此权限来监听全局鼠标移动事件"
+    },
+    {
+      "name": "internet_permission_reason",
+      "value": "需要此权限通过 UDP 向 BtGamePad 发送鼠标坐标"
+    }
+  ]
+}

@@ -6,8 +6,9 @@ import image from '@ohos.multimedia.image';
 import router from '@ohos.router';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { wifiManager } from '@kit.ConnectivityKit';
 import { HidDebugState, RemoteDeviceItem } from '../services/AbsoluteTouchHidService';
-import { hidService, layoutRepository, nativeInputRuntimeService } from '../services/AppSession';
+import { hidService, layoutRepository, mouseFeedbackService, nativeInputRuntimeService } from '../services/AppSession';
 import { InputLayout, LayoutControlItem } from '../services/LayoutRepository';
 import { NativeInputRuntimeState } from '../services/NativeInputRuntimeService';
 
@@ -98,6 +99,8 @@ const STICK_LOOK_BASE_SPEED = 480;
 const EXECUTION_TOUCH_FEEDBACK_SIZE = 32;
 const EXECUTION_TOUCH_FEEDBACK_TIMEOUT_MS = 260;
 const HID_AXIS_MAX = 32767;
+const MOUSE_FEEDBACK_DEFAULT_PORT = 21345;
+const MOUSE_FEEDBACK_STABLE_EPS = 2;
 const CONTROL_COORDINATE_SPACE_LEGACY_CANVAS = 'background-v1';
 const CONTROL_COORDINATE_SPACE_BACKGROUND = 'background-v2';
 const DIRECTIONAL_BINDING_PART_COUNT = 4;
@@ -423,6 +426,15 @@ struct LayoutEditor {
   @State mouseSpeedMultiplier: number = MOUSE_SPEED_DEFAULT;
   @State portraitMode: boolean = PORTRAIT_MODE_DEFAULT;
   @State flipMode: boolean = FLIP_MODE_DEFAULT;
+  @State mouseFeedbackEnabled: boolean = true;
+  @State mouseFeedbackPort: number = MOUSE_FEEDBACK_DEFAULT_PORT;
+  @State mouseFeedbackActive: boolean = false;
+  @State mouseFeedbackError: string = '';
+  @State mouseFeedbackHostIp: string = '';
+  @State mouseFeedbackWifiIp: string = '';
+  @State mouseFeedbackDisplayX: number = 0;
+  @State mouseFeedbackDisplayY: number = 0;
+  @State mouseFeedbackReceivedCount: number = 0;
   private mouseEstimatedX: number = 0;
   private mouseEstimatedY: number = 0;
   private mouseOriginResetNeeded: boolean = true;
@@ -438,6 +450,39 @@ struct LayoutEditor {
   private stickLookAnimIntervalId: number = -1;
   private stickLookAnimCenterX: number = 0;
   private stickLookAnimCenterY: number = 0;
+  // Mouse position feedback calibration
+  private mouseCalibrated: boolean = false;
+  private mouseCalRatioX: number = 1.0;
+  private mouseCalRatioY: number = 1.0;
+  private mouseLastFeedbackX: number = 0;
+  private mouseLastFeedbackY: number = 0;
+  private mouseAfterCalSent: boolean = false;
+  private mouseAfterCalSentX: number = 0;
+  private mouseAfterCalSentY: number = 0;
+  private mouseFeedbackPrevEstX: number = 0;
+  private mouseFeedbackPrevEstY: number = 0;
+  private mouseFeedbackStableCount: number = 0;
+  private mouseFeedbackStableConsumed: boolean = false;
+  private mouseApproachGainX: number = 1.0;
+  private mouseApproachGainY: number = 1.0;
+  private mouseLastCmdTargetX: number = 0;
+  private mouseLastCmdTargetY: number = 0;
+  private mouseLastCmdPrevX: number = 0;
+  private mouseLastCmdPrevY: number = 0;
+  private mouseLastCmdPrevDistance: number = 0;
+  private mouseButtonPressStartTimeByControlId: Map<string, number> = new Map<string, number>();
+  private mouseAutoDownControlId: string = '';
+  private mouseAutoDownTimestamp: number = 0;
+  private mousePendingReleaseControlId: string = '';
+  private mousePendingReleaseDelayMs: number = 0;
+  private mousePendingReleaseTimeoutId: number = -1;
+  private mousePendingTargetX: number = -1;
+  private mousePendingTargetY: number = -1;
+  private mousePendingClick: boolean = false;
+  private mouseStickInProgress: boolean = false;
+  private mouseStickCenterX: number = 0;
+  private mouseStickCenterY: number = 0;
+  private mouseApproachIntervalId: number = -1;
 
   aboutToAppear(): void {
     this.menuExpanded = false;
@@ -454,12 +499,14 @@ struct LayoutEditor {
       this.refreshConnectionSummary(state, devices);
       this.ensureNativeInputRuntime();
     });
+    this.setupMouseFeedback();
   }
 
   aboutToDisappear(): void {
     hidService.setStateListener(null);
     nativeInputRuntimeService.setListener(null);
     nativeInputRuntimeService.stop();
+    this.teardownMouseFeedback();
     this.resetExecutionState(true);
     this.clearMouseStickMoveInterval();
     this.draggingControlId = '';
@@ -1862,6 +1909,7 @@ struct LayoutEditor {
     this.bindingCaptureTargetId = '';
     this.bindingCaptureHint = '执行模式已启动，若需调整布局请先返回编辑模式。';
     this.executionStatusText = `已加载 ${this.getBoundControlCount()} 个已绑定控件，等待输入。`;
+    this.ensureMouseFeedbackRunning();
     this.updateControlEditorMessage();
   }
 
@@ -2052,15 +2100,28 @@ struct LayoutEditor {
   }
 
   private updateButtonExecutionTargets(bindingCode: string, active: boolean): void {
+    const now = Date.now();
     for (const control of this.layoutControls) {
       if (control.inputCode !== bindingCode || control.inputKind !== CONTROL_TYPE_BUTTON) {
         continue;
       }
 
       if (!active) {
-        this.removeExecutionTarget(control.id);
+        if (this.isSimulateMouseMode() && this.isExecutionMode()) {
+          const startTime = this.mouseButtonPressStartTimeByControlId.get(control.id);
+          const holdMs = Math.max(0, now - (startTime !== undefined ? startTime : now));
+          this.mouseButtonPressStartTimeByControlId.delete(control.id);
+          this.mousePendingReleaseControlId = control.id;
+          this.mousePendingReleaseDelayMs = holdMs;
+          // Keep pursuing this button until we actually click it.
+          this.upsertExecutionTarget(control.id, this.getRoundControlCenterXUnits(control), this.getRoundControlCenterYUnits(control));
+        } else {
+          this.removeExecutionTarget(control.id);
+        }
         continue;
       }
+
+      this.mouseButtonPressStartTimeByControlId.set(control.id, now);
 
       this.upsertExecutionTarget(control.id, this.getRoundControlCenterXUnits(control), this.getRoundControlCenterYUnits(control));
     }
@@ -2150,20 +2211,268 @@ struct LayoutEditor {
     this.mouseOriginResetNeeded = false;
   }
 
-  private moveMouseToCanvasPosition(xUnits: number, yUnits: number): void {
-    this.resetMouseToOrigin();
-
-    const transformed = this.transformCanvasUnits(xUnits, yUnits);
-    const targetX = Math.round(transformed.x * this.mouseSpeedMultiplier);
-    const targetY = Math.round(transformed.y * this.mouseSpeedMultiplier);
-    const deltaX = targetX - this.mouseEstimatedX;
-    const deltaY = targetY - this.mouseEstimatedY;
-
-    if (deltaX !== 0 || deltaY !== 0) {
-      hidService.sendMouseMove(deltaX, deltaY);
-      this.mouseEstimatedX = targetX;
-      this.mouseEstimatedY = targetY;
+  private setupMouseFeedback(): void {
+    this.refreshWlanIp();
+    mouseFeedbackService.setPositionCallback((x: number, y: number) => {
+      // Keep feedback processing isolated to mouse execution mode to avoid
+      // high-frequency UI state updates impacting digitizer mode latency.
+      if (!this.isSimulateMouseMode() || !this.isExecutionMode()) {
+        return;
+      }
+      this.mouseFeedbackDisplayX = x;
+      this.mouseFeedbackDisplayY = y;
+      this.applyMouseFeedbackPosition(x, y);
+    });
+    mouseFeedbackService.setStatusCallback((active: boolean, error: string) => {
+      this.mouseFeedbackActive = active;
+      this.mouseFeedbackError = error;
+      if (!active && error.length === 0 && this.mouseFeedbackEnabled) {
+        this.mouseFeedbackActive = false;
+      }
+    });
+    // Auto-start only in mouse execution mode.
+    if (this.mouseFeedbackEnabled && this.isSimulateMouseMode() && this.isExecutionMode() && !mouseFeedbackService.isActive()) {
+      void mouseFeedbackService.start(this.mouseFeedbackPort);
     }
+  }
+
+  private ensureMouseFeedbackRunning(): void {
+    if (!this.isSimulateMouseMode() || !this.isExecutionMode()) {
+      return;
+    }
+    if (!this.mouseFeedbackEnabled) {
+      this.mouseFeedbackEnabled = true;
+    }
+    if (!mouseFeedbackService.isActive()) {
+      void mouseFeedbackService.start(this.mouseFeedbackPort);
+    }
+  }
+
+  private teardownMouseFeedback(): void {
+    mouseFeedbackService.setPositionCallback(null);
+    mouseFeedbackService.setStatusCallback(null);
+    if (mouseFeedbackService.isActive()) {
+      void mouseFeedbackService.stop();
+    }
+    this.mouseFeedbackEnabled = false;
+  }
+
+  private refreshWlanIp(): void {
+    try {
+      const ipInfo = wifiManager.getIpInfo();
+      if (ipInfo && ipInfo.ipAddress > 0) {
+        const ip = (ipInfo.ipAddress >>> 24) + '.' +
+          ((ipInfo.ipAddress >>> 16) & 0xFF) + '.' +
+          ((ipInfo.ipAddress >>> 8) & 0xFF) + '.' +
+          (ipInfo.ipAddress & 0xFF);
+        this.mouseFeedbackHostIp = ip;
+        this.mouseFeedbackWifiIp = ip;
+      } else {
+        this.mouseFeedbackHostIp = '无网络';
+        this.mouseFeedbackWifiIp = '';
+      }
+    } catch (e) {
+      this.mouseFeedbackHostIp = '获取 IP 失败';
+    }
+  }
+
+  private applyMouseFeedbackPosition(normX: number, normY: number): void {
+    if (!this.isSimulateMouseMode() || !this.isExecutionMode()) {
+      return;
+    }
+
+    this.mouseFeedbackReceivedCount = mouseFeedbackService.getReceivedCount();
+
+    const canvasX = normX * CONTROL_CANVAS_UNITS;
+    const canvasY = normY * CONTROL_CANVAS_UNITS;
+
+    const transformed = this.transformCanvasUnits(canvasX, canvasY);
+    const estX = Math.round(transformed.x);
+    const estY = Math.round(transformed.y);
+
+    // Calibration update: we sent `mouseLastSent` HID units, cursor moved to (estX, estY)
+    if (this.mouseAfterCalSent) {
+      const movedCanvX = estX - this.mouseLastFeedbackX;
+      const movedCanvY = estY - this.mouseLastFeedbackY;
+
+      if (Math.abs(movedCanvX) > 2 && this.mouseAfterCalSentX !== 0) {
+        // Signed ratio keeps axis direction; can be negative when axis is reversed.
+        this.mouseCalRatioX = movedCanvX / this.mouseAfterCalSentX;
+      }
+      if (Math.abs(movedCanvY) > 2 && this.mouseAfterCalSentY !== 0) {
+        this.mouseCalRatioY = movedCanvY / this.mouseAfterCalSentY;
+      }
+      this.mouseAfterCalSent = false;
+
+      // Mark as calibrated if ratio is reasonable
+      if (Math.abs(this.mouseCalRatioX) > 0.01 && Math.abs(this.mouseCalRatioX) < 50 &&
+          Math.abs(this.mouseCalRatioY) > 0.01 && Math.abs(this.mouseCalRatioY) < 50) {
+        this.mouseCalibrated = true;
+      }
+
+      // Evaluate whether this move got closer to target; if not, reduce movement gain.
+      const newDx = this.mouseLastCmdTargetX - estX;
+      const newDy = this.mouseLastCmdTargetY - estY;
+      const newDistance = Math.sqrt(newDx * newDx + newDy * newDy);
+
+      const oldDx = this.mouseLastCmdTargetX - this.mouseLastCmdPrevX;
+      const oldDy = this.mouseLastCmdTargetY - this.mouseLastCmdPrevY;
+
+      const overshootX = (oldDx === 0) ? false : (oldDx > 0 && newDx < 0) || (oldDx < 0 && newDx > 0);
+      const overshootY = (oldDy === 0) ? false : (oldDy > 0 && newDy < 0) || (oldDy < 0 && newDy > 0);
+      const movedFarther = newDistance > this.mouseLastCmdPrevDistance + 2;
+
+      const oldAbsX = Math.abs(oldDx);
+      const oldAbsY = Math.abs(oldDy);
+      const newAbsX = Math.abs(newDx);
+      const newAbsY = Math.abs(newDy);
+      const improveX = oldAbsX - newAbsX;
+      const improveY = oldAbsY - newAbsY;
+
+      if (overshootX || newAbsX > oldAbsX + 2) {
+        this.mouseApproachGainX = Math.max(0.2, this.mouseApproachGainX * 0.7);
+      } else if (oldAbsX > 6 && improveX < Math.max(1, oldAbsX * 0.08)) {
+        // Did not approach clearly on X, increase amplitude.
+        this.mouseApproachGainX = Math.min(3.0, this.mouseApproachGainX * 1.2);
+      } else if (improveX > 2) {
+        this.mouseApproachGainX = Math.min(3.0, this.mouseApproachGainX * 1.03);
+      }
+
+      if (overshootY || newAbsY > oldAbsY + 2) {
+        this.mouseApproachGainY = Math.max(0.2, this.mouseApproachGainY * 0.7);
+      } else if (oldAbsY > 6 && improveY < Math.max(1, oldAbsY * 0.08)) {
+        // Did not approach clearly on Y, increase amplitude.
+        this.mouseApproachGainY = Math.min(3.0, this.mouseApproachGainY * 1.2);
+      } else if (improveY > 2) {
+        this.mouseApproachGainY = Math.min(3.0, this.mouseApproachGainY * 1.03);
+      }
+
+      hilog.info(LOG_DOMAIN, LOG_TAG,
+        'mouse-cal: est=(%{public}d,%{public}d) moved=(%{public}d,%{public}d) sent=(%{public}d,%{public}d) ratio=(%{public}.3f,%{public}.3f) gain=(%{public}.3f,%{public}.3f) dist=%{public}.2f->%{public}.2f overshoot=(%{public}d,%{public}d)',
+        estX, estY,
+        Math.round(movedCanvX), Math.round(movedCanvY),
+        this.mouseAfterCalSentX, this.mouseAfterCalSentY,
+        this.mouseCalRatioX, this.mouseCalRatioY,
+        this.mouseApproachGainX, this.mouseApproachGainY,
+        this.mouseLastCmdPrevDistance, newDistance,
+        overshootX ? 1 : 0, overshootY ? 1 : 0);
+    }
+
+    this.mouseLastFeedbackX = estX;
+    this.mouseLastFeedbackY = estY;
+    this.mouseEstimatedX = estX;
+    this.mouseEstimatedY = estY;
+    this.mouseOriginResetNeeded = false;
+    this.mouseFeedbackActive = true;
+
+    // Only trigger next movement step after two consecutive identical feedback samples.
+    const sameAsPrev = Math.abs(estX - this.mouseFeedbackPrevEstX) <= MOUSE_FEEDBACK_STABLE_EPS &&
+      Math.abs(estY - this.mouseFeedbackPrevEstY) <= MOUSE_FEEDBACK_STABLE_EPS;
+    if (sameAsPrev) {
+      this.mouseFeedbackStableCount++;
+    } else {
+      this.mouseFeedbackStableCount = 1;
+      this.mouseFeedbackStableConsumed = false;
+      this.mouseFeedbackPrevEstX = estX;
+      this.mouseFeedbackPrevEstY = estY;
+    }
+
+    if (sameAsPrev && this.mouseFeedbackStableCount >= 2 && !this.mouseFeedbackStableConsumed) {
+      this.mouseFeedbackStableConsumed = true;
+      hilog.info(LOG_DOMAIN, LOG_TAG,
+        'mouse-stable-trigger: est=(%{public}d,%{public}d) stableCount=%{public}d',
+        estX, estY, this.mouseFeedbackStableCount);
+      if (this.isExecutionMode() && this.isSimulateMouseMode()) {
+        this.reconcileExecutionOutput();
+      }
+    }
+  }
+
+  // Per-frame mouse approach tick - called from reconcileExecutionOutput
+  private tickMouseApproach(targetX: number, targetY: number): boolean {
+    if (!hidService.getState().connected) {
+      return false;
+    }
+
+    const dx = targetX - this.mouseEstimatedX;
+    const dy = targetY - this.mouseEstimatedY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Arrived?
+    if (distance < 15) {
+      return true;
+    }
+
+    const maxStepCanvX = Math.max(20, Math.round(220 * this.mouseApproachGainX));
+    const maxStepCanvY = Math.max(20, Math.round(220 * this.mouseApproachGainY));
+    let stepCanvX = clampEditorValue(dx, -maxStepCanvX, maxStepCanvX);
+    let stepCanvY = clampEditorValue(dy, -maxStepCanvY, maxStepCanvY);
+
+    let hidDX: number;
+    let hidDY: number;
+
+    if (this.mouseCalibrated) {
+      // Use calibrated ratio
+      hidDX = Math.round(stepCanvX / this.mouseCalRatioX);
+      hidDY = Math.round(stepCanvY / this.mouseCalRatioY);
+    } else {
+      // Initial guess: assume 1 HID unit ≈ 1 canvas unit initially
+      hidDX = Math.round(stepCanvX);
+      hidDY = Math.round(stepCanvY);
+    }
+
+    // Clamp HID units to reasonable range
+    const maxHid = 1200;
+    hidDX = Math.max(-maxHid, Math.min(maxHid, hidDX));
+    hidDY = Math.max(-maxHid, Math.min(maxHid, hidDY));
+
+    if (hidDX === 0 && Math.abs(dx) > 5) {
+      hidDX = dx > 0 ? 1 : -1;
+    }
+    if (hidDY === 0 && Math.abs(dy) > 5) {
+      hidDY = dy > 0 ? 1 : -1;
+    }
+
+    if (hidDX === 0 && hidDY === 0) {
+      return false;
+    }
+
+    // Track what we sent for calibration
+    this.mouseLastCmdTargetX = targetX;
+    this.mouseLastCmdTargetY = targetY;
+    this.mouseLastCmdPrevX = this.mouseEstimatedX;
+    this.mouseLastCmdPrevY = this.mouseEstimatedY;
+    this.mouseLastCmdPrevDistance = distance;
+
+    this.mouseLastFeedbackX = this.mouseEstimatedX;
+    this.mouseLastFeedbackY = this.mouseEstimatedY;
+    this.mouseAfterCalSentX = hidDX;
+    this.mouseAfterCalSentY = hidDY;
+    this.mouseAfterCalSent = true;
+
+    hilog.info(LOG_DOMAIN, LOG_TAG,
+      'mouse-step: target=(%{public}d,%{public}d) est=(%{public}d,%{public}d) d=(%{public}d,%{public}d) hid=(%{public}d,%{public}d) ratio=(%{public}.3f,%{public}.3f) gain=(%{public}.3f,%{public}.3f) calibrated=%{public}d',
+      targetX, targetY,
+      this.mouseEstimatedX, this.mouseEstimatedY,
+      Math.round(dx), Math.round(dy),
+      hidDX, hidDY,
+      this.mouseCalRatioX, this.mouseCalRatioY,
+      this.mouseApproachGainX, this.mouseApproachGainY,
+      this.mouseCalibrated ? 1 : 0);
+
+    hidService.sendMouseMove(hidDX, hidDY);
+    // Don't update estimated here - wait for feedback
+    return false;
+  }
+
+  private clearMouseApproachInterval(): void {
+    if (this.mouseApproachIntervalId >= 0) {
+      clearInterval(this.mouseApproachIntervalId);
+      this.mouseApproachIntervalId = -1;
+    }
+    this.mousePendingTargetX = -1;
+    this.mousePendingTargetY = -1;
+    this.mousePendingClick = false;
   }
 
   private mouseClickDown(): void {
@@ -2174,53 +2483,45 @@ struct LayoutEditor {
     hidService.releaseMouseButton();
   }
 
+  private clearMousePendingReleaseTimer(): void {
+    if (this.mousePendingReleaseTimeoutId >= 0) {
+      clearTimeout(this.mousePendingReleaseTimeoutId);
+      this.mousePendingReleaseTimeoutId = -1;
+    }
+  }
+
+  private scheduleMousePendingRelease(controlId: string): void {
+    this.clearMousePendingReleaseTimer();
+    if (this.mousePendingReleaseControlId !== controlId) {
+      return;
+    }
+
+    const delayMs = Math.max(0, this.mousePendingReleaseDelayMs);
+    this.mousePendingReleaseTimeoutId = setTimeout(() => {
+      this.mousePendingReleaseTimeoutId = -1;
+      if (!this.isExecutionMode() || !this.isSimulateMouseMode()) {
+        return;
+      }
+      if (this.mousePendingReleaseControlId !== controlId) {
+        return;
+      }
+
+      this.mouseClickUp();
+      this.mouseAutoDownControlId = '';
+      this.mouseAutoDownTimestamp = 0;
+      this.mousePendingReleaseControlId = '';
+      this.mousePendingReleaseDelayMs = 0;
+      this.removeExecutionTarget(controlId);
+      this.reconcileExecutionOutput();
+    }, delayMs);
+  }
+
   private clearMouseStickMoveInterval(): void {
     if (this.mouseStickMoveIntervalId >= 0) {
       clearInterval(this.mouseStickMoveIntervalId);
       this.mouseStickMoveIntervalId = -1;
     }
-  }
-
-  private startMouseStickMove(controlId: string, centerXUnits: number, centerYUnits: number, radiusUnits: number): void {
-    this.clearMouseStickMoveInterval();
-    this.resetMouseToOrigin();
-
-    const centerScreenX = Math.round(centerXUnits * this.mouseSpeedMultiplier);
-    const centerScreenY = Math.round(centerYUnits * this.mouseSpeedMultiplier);
-
-    this.mouseStickMoveIntervalId = setInterval(() => {
-      if (!this.isExecutionMode() || this.simulateMode !== SIMULATE_MODE_MOUSE) {
-        this.clearMouseStickMoveInterval();
-        return;
-      }
-
-      const target = this.getTopExecutionTarget();
-      if (target === null || target.controlId !== controlId) {
-        this.clearMouseStickMoveInterval();
-        return;
-      }
-
-      const transformed = this.transformCanvasUnits(target.xUnits, target.yUnits);
-      const targetScreenX = Math.round(transformed.x * this.mouseSpeedMultiplier);
-      const targetScreenY = Math.round(transformed.y * this.mouseSpeedMultiplier);
-
-      const dx = targetScreenX - this.mouseEstimatedX;
-      const dy = targetScreenY - this.mouseEstimatedY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      if (distance < 1) {
-        return;
-      }
-
-      const stepX = Math.round(dx * MOUSE_STICK_MOVE_STEP_FRACTION);
-      const stepY = Math.round(dy * MOUSE_STICK_MOVE_STEP_FRACTION);
-
-      if (stepX !== 0 || stepY !== 0) {
-        hidService.sendMouseMove(stepX, stepY);
-        this.mouseEstimatedX += stepX;
-        this.mouseEstimatedY += stepY;
-      }
-    }, MOUSE_STICK_MOVE_STEP_MS);
+    this.mouseStickInProgress = false;
   }
 
   private endMouseStickMove(): void {
@@ -2290,35 +2591,36 @@ struct LayoutEditor {
       return;
     }
 
-    const unitsPerFrame = this.stickLookAnimMagnitude * STICK_LOOK_BASE_SPEED * STICK_LOOK_ANIM_INTERVAL_MS / 1000;
-    this.stickLookAnimCurrentX += this.stickLookAnimDirectionX * unitsPerFrame;
-    this.stickLookAnimCurrentY += this.stickLookAnimDirectionY * unitsPerFrame;
-
-    const outOfBounds = this.stickLookAnimCurrentX < 0 || this.stickLookAnimCurrentX > CONTROL_CANVAS_UNITS ||
-      this.stickLookAnimCurrentY < 0 || this.stickLookAnimCurrentY > CONTROL_CANVAS_UNITS;
-
-    if (outOfBounds) {
-      if (this.isSimulateMouseMode()) {
-        this.mouseClickUp();
-        this.mouseOriginResetNeeded = true;
-      } else {
-        hidService.releaseTouch();
-      }
-      this.stickLookAnimCurrentX = this.stickLookAnimCenterX;
-      this.stickLookAnimCurrentY = this.stickLookAnimCenterY;
-      this.dispatchedExecutionActive = false;
-      return;
-    }
-
     if (this.isSimulateMouseMode()) {
-      const rawDX = Math.round(this.stickLookAnimDirectionX * unitsPerFrame * this.mouseSpeedMultiplier);
-      const rawDY = Math.round(this.stickLookAnimDirectionY * unitsPerFrame * this.mouseSpeedMultiplier);
+      const transCenter = this.transformCanvasUnits(this.stickLookAnimCenterX, this.stickLookAnimCenterY);
+      const atCenter = this.tickMouseApproach(Math.round(transCenter.x), Math.round(transCenter.y));
+      if (!atCenter) {
+        return;
+      }
+      const unitsPerFrame = this.stickLookAnimMagnitude * STICK_LOOK_BASE_SPEED * STICK_LOOK_ANIM_INTERVAL_MS / 1000;
+      const rawDX = Math.round(this.stickLookAnimDirectionX * unitsPerFrame);
+      const rawDY = Math.round(this.stickLookAnimDirectionY * unitsPerFrame);
       const transformedDelta = this.transformCanvasDelta(rawDX, rawDY);
       if (transformedDelta.x !== 0 || transformedDelta.y !== 0) {
         hidService.sendMouseMove(transformedDelta.x, transformedDelta.y);
       }
       this.mouseClickDown();
     } else {
+      const unitsPerFrame = this.stickLookAnimMagnitude * STICK_LOOK_BASE_SPEED * STICK_LOOK_ANIM_INTERVAL_MS / 1000;
+      this.stickLookAnimCurrentX += this.stickLookAnimDirectionX * unitsPerFrame;
+      this.stickLookAnimCurrentY += this.stickLookAnimDirectionY * unitsPerFrame;
+
+      const outOfBounds = this.stickLookAnimCurrentX < 0 || this.stickLookAnimCurrentX > CONTROL_CANVAS_UNITS ||
+        this.stickLookAnimCurrentY < 0 || this.stickLookAnimCurrentY > CONTROL_CANVAS_UNITS;
+
+      if (outOfBounds) {
+        hidService.releaseTouch();
+        this.stickLookAnimCurrentX = this.stickLookAnimCenterX;
+        this.stickLookAnimCurrentY = this.stickLookAnimCenterY;
+        this.dispatchedExecutionActive = false;
+        return;
+      }
+
       const rawX = this.toHidAxisValue(this.stickLookAnimCurrentX);
       const rawY = this.toHidAxisValue(this.stickLookAnimCurrentY);
       const transformed = this.transformHidCoordinates(rawX, rawY);
@@ -2390,6 +2692,17 @@ struct LayoutEditor {
       if (this.dispatchedExecutionActive && this.dispatchedExecutionControlId !== nextTarget.controlId) {
         this.releaseExecutionAction();
       }
+      if (this.isSimulateMouseMode() && !this.mouseFeedbackActive) {
+        this.ensureMouseFeedbackRunning();
+      }
+      if (this.isSimulateMouseMode() && this.mouseFeedbackReceivedCount === 0 && !this.mouseFeedbackActive) {
+        this.executionStatusText = '鼠标位置反馈未收到数据，鼠标模式可能无法正常工作。请检查被控端。';
+        return;
+      }
+      if (this.isSimulateMouseMode() && this.mouseFeedbackReceivedCount === 0) {
+        // No feedback yet, but listening - show hint only once
+        this.executionStatusText = '等待鼠标位置反馈…';
+      }
       this.sendExecutionAction(nextTarget);
     }
 
@@ -2403,8 +2716,13 @@ struct LayoutEditor {
 
   private releaseExecutionAction(): void {
     if (this.isSimulateMouseMode()) {
+      this.clearMousePendingReleaseTimer();
       this.mouseClickUp();
       this.endMouseStickMove();
+      this.mouseAutoDownControlId = '';
+      this.mouseAutoDownTimestamp = 0;
+      this.mousePendingReleaseControlId = '';
+      this.mousePendingReleaseDelayMs = 0;
     } else {
       hidService.releaseTouch();
     }
@@ -2413,25 +2731,96 @@ struct LayoutEditor {
   private sendExecutionAction(target: ExecutionTouchTarget): void {
     if (this.isSimulateMouseMode()) {
       if (this.mouseLastActiveControlId !== target.controlId) {
+        this.clearMousePendingReleaseTimer();
+        if (this.mouseLastActiveControlId.length > 0) {
+          this.removeExecutionTarget(this.mouseLastActiveControlId);
+        }
+        this.clearMouseApproachInterval();
         this.endMouseStickMove();
+        this.mouseClickUp();
+        this.mouseCalibrated = false;
+        this.mouseApproachGainX = 1.0;
+        this.mouseApproachGainY = 1.0;
+        this.mouseFeedbackStableCount = 0;
+        this.mouseFeedbackStableConsumed = false;
+        this.mouseAutoDownControlId = '';
+        this.mouseAutoDownTimestamp = 0;
+        this.mousePendingReleaseControlId = '';
+        this.mousePendingReleaseDelayMs = 0;
         this.mouseLastActiveControlId = target.controlId;
       }
 
       const control = this.findLocalControl(target.controlId);
       if (control !== null) {
         if (control.inputKind === CONTROL_TYPE_BUTTON) {
-          this.moveMouseToCanvasPosition(target.xUnits, target.yUnits);
-          this.mouseClickDown();
+          const centerX = this.isRoundControlType(control.inputKind)
+            ? this.getRoundControlCenterXUnits(control)
+            : this.getControlCenterX(control);
+          const centerY = this.isRoundControlType(control.inputKind)
+            ? this.getRoundControlCenterYUnits(control)
+            : this.getControlCenterY(control);
+
+          const trans = this.transformCanvasUnits(centerX, centerY);
+          const arrived = this.tickMouseApproach(Math.round(trans.x), Math.round(trans.y));
+          if (arrived) {
+            if (this.mouseAutoDownControlId !== control.id) {
+              this.mouseClickDown();
+              this.mouseAutoDownControlId = control.id;
+              this.mouseAutoDownTimestamp = Date.now();
+
+              if (this.mousePendingReleaseControlId === control.id) {
+                this.scheduleMousePendingRelease(control.id);
+              }
+            }
+          } else {
+            if (this.mouseAutoDownControlId === control.id) {
+              this.clearMousePendingReleaseTimer();
+              this.mouseClickUp();
+              this.mouseAutoDownControlId = '';
+              this.mouseAutoDownTimestamp = 0;
+            }
+          }
         } else if (this.isMoveControlType(control.inputKind) || this.isLookControlType(control.inputKind)) {
-          if (this.mouseStickMoveIntervalId < 0) {
-            const centerX = this.getControlCenterXUnits(control);
-            const centerY = this.getControlCenterYUnits(control);
-            const radiusUnits = Math.max(control.width, CONTROL_DEFAULT_SIZE);
-            this.startMouseStickMove(target.controlId, centerX, centerY, radiusUnits);
+          if (!this.mouseStickInProgress) {
+            this.mouseStickInProgress = true;
+            const centerX = this.isRoundControlType(control.inputKind)
+              ? this.getRoundControlCenterXUnits(control)
+              : this.getControlCenterX(control);
+            const centerY = this.isRoundControlType(control.inputKind)
+              ? this.getRoundControlCenterYUnits(control)
+              : this.getControlCenterY(control);
+            this.mouseStickCenterX = centerX;
+            this.mouseStickCenterY = centerY;
+          }
+
+          const transCenter = this.transformCanvasUnits(this.mouseStickCenterX, this.mouseStickCenterY);
+          const atCenter = this.tickMouseApproach(Math.round(transCenter.x), Math.round(transCenter.y));
+
+          if (atCenter) {
+            const transTarget = this.transformCanvasUnits(target.xUnits, target.yUnits);
+            const tx = Math.round(transTarget.x);
+            const ty = Math.round(transTarget.y);
+            const tdx = tx - this.mouseEstimatedX;
+            const tdy = ty - this.mouseEstimatedY;
+            const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
+
+            if (tdist > 5) {
+              // Follow the stick direction
+              const stepX = Math.round(tdx * MOUSE_STICK_MOVE_STEP_FRACTION);
+              const stepY = Math.round(tdy * MOUSE_STICK_MOVE_STEP_FRACTION);
+              if (stepX !== 0 || stepY !== 0) {
+                hidService.sendMouseMove(stepX, stepY);
+              }
+            }
           }
         } else {
-          this.moveMouseToCanvasPosition(target.xUnits, target.yUnits);
-          this.mouseClickDown();
+          const trans = this.transformCanvasUnits(target.xUnits, target.yUnits);
+          const arrived = this.tickMouseApproach(Math.round(trans.x), Math.round(trans.y));
+          if (arrived) {
+            this.mouseClickDown();
+          } else {
+            this.mouseClickUp();
+          }
         }
       }
     } else {
@@ -2800,7 +3189,8 @@ struct LayoutEditor {
 
     if (active) {
       if (this.isSimulateMouseMode()) {
-        this.moveMouseToCanvasPosition(this.keyboardAnimCurrentX, this.keyboardAnimCurrentY);
+        const transKb = this.transformCanvasUnits(this.keyboardAnimCurrentX, this.keyboardAnimCurrentY);
+        this.tickMouseApproach(Math.round(transKb.x), Math.round(transKb.y));
         this.mouseClickDown();
       } else {
         const rawX = this.toHidAxisValue(this.keyboardAnimCurrentX);
@@ -4701,6 +5091,10 @@ struct LayoutEditor {
                     .onChange((isChecked: boolean) => {
                       if (isChecked) {
                         this.simulateMode = SIMULATE_MODE_MOUSE;
+                        this.ensureMouseFeedbackRunning();
+                      } else if (this.simulateMode === SIMULATE_MODE_MOUSE) {
+                        void mouseFeedbackService.stop();
+                        this.mouseFeedbackEnabled = false;
                       }
                     })
 
@@ -4712,26 +5106,86 @@ struct LayoutEditor {
               .width('100%')
 
               if (this.simulateMode === SIMULATE_MODE_MOUSE) {
-                Text(`鼠标速度: ${this.mouseSpeedMultiplier}x`)
-                  .fontSize(12)
-                  .fontColor($r('app.color.editor_text_secondary'))
+                Row() {
+                  Text('鼠标位置反馈')
+                    .fontSize(12)
+                    .fontColor($r('app.color.editor_text_secondary'))
+                    .layoutWeight(1)
+
+                  Toggle({ type: ToggleType.Switch, isOn: this.mouseFeedbackEnabled })
+                    .selectedColor(PRIMARY_COLOR)
+                    .onChange((isOn: boolean) => {
+                      this.mouseFeedbackEnabled = isOn;
+                      if (isOn) {
+                        void mouseFeedbackService.start(this.mouseFeedbackPort);
+                      } else {
+                        void mouseFeedbackService.stop();
+                      }
+                    })
+                }
+                .width('100%')
+
+                if (this.mouseFeedbackEnabled) {
+                  Row({ space: 8 }) {
+                    Text('本机 IP')
+                      .fontSize(11)
+                      .fontColor($r('app.color.editor_text_tertiary'))
+
+                    Text(this.mouseFeedbackHostIp)
+                      .fontSize(11)
+                      .fontColor(PRIMARY_COLOR)
+                      .fontWeight(FontWeight.Medium)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
+                  .width('100%')
+                  .margin({ top: 6 })
+
+                  Row({ space: 8 }) {
+                    Text('端口')
+                      .fontSize(11)
+                      .fontColor($r('app.color.editor_text_tertiary'))
+
+                    TextInput({ text: `${this.mouseFeedbackPort}` })
+                      .width(80)
+                      .height(30)
+                      .fontSize(12)
+                      .type(InputType.Number)
+                      .backgroundColor($r('app.color.editor_button_bg'))
+                      .borderRadius(8)
+                      .onChange((value: string) => {
+                        const parsed = Number.parseInt(value, 10);
+                        if (!Number.isNaN(parsed) && parsed > 0 && parsed <= 65535) {
+                          this.mouseFeedbackPort = parsed;
+                        }
+                      })
+                  }
+                  .width('100%')
+                  .margin({ top: 6 })
+
+                  Row({ space: 6 }) {
+                    Circle({ width: 8, height: 8 })
+                      .fill(this.mouseFeedbackActive ? '#34D399' : '#9CA3AF')
+
+                    Text(this.mouseFeedbackError.length > 0
+                      ? `错误: ${this.mouseFeedbackError}`
+                      : this.mouseFeedbackActive && this.mouseFeedbackReceivedCount > 0
+                        ? `正在接收 ${this.mouseFeedbackReceivedCount} 坐标 ${(this.mouseFeedbackDisplayX * 100).toFixed(2)}%, ${(this.mouseFeedbackDisplayY * 100).toFixed(2)}%`
+                        : this.mouseFeedbackActive
+                          ? '正在监听…（尚未收到数据）'
+                          : '等待数据...')
+                      .fontSize(10)
+                      .fontColor(this.mouseFeedbackError.length > 0
+                        ? '#F87171'
+                        : this.mouseFeedbackActive
+                          ? '#34D399'
+                          : $r('app.color.editor_text_tertiary'))
+                      .maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
                   .width('100%')
                   .margin({ top: 4 })
-
-                Slider({
-                  style: SliderStyle.OutSet,
-                  value: this.mouseSpeedMultiplier,
-                  min: MOUSE_SPEED_MIN,
-                  max: MOUSE_SPEED_MAX,
-                  step: 1,
-                })
-                  .width('100%')
-                  .blockColor(PRIMARY_COLOR)
-                  .trackColor('#C8CDD5')
-                  .selectedColor(PRIMARY_COLOR)
-                  .onChange((value: number) => {
-                    this.mouseSpeedMultiplier = Math.round(value);
-                  })
+                }
               }
 
               Row() {
